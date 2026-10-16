@@ -1,8 +1,9 @@
 import json
 import math
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
 import pytest
@@ -447,3 +448,110 @@ def test_worker_publishes_audited_brief_and_reflection(tmp_path, monkeypatch):
     assert "No campus-specific or local spending evidence" in reflection
     assert len(critique.issues) == 3
     assert status["financial_audit"]["minimum_monthly_customers"] == 4103
+
+
+def test_native_ollama_llm_uses_bounded_context_and_returns_crewai_tool_calls(monkeypatch):
+    observed = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "calculator_tool",
+                                    "arguments": {"expression": "6 * 7"},
+                                }
+                            }
+                        ]
+                    }
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        observed["url"] = request.full_url
+        observed["timeout"] = timeout
+        observed["payload"] = json.loads(request.data)
+        return FakeResponse()
+
+    monkeypatch.setattr(app, "urlopen", fake_urlopen)
+    llm = app.make_ollama_llm("ollama/llama3.2:3b", "http://ollama:11434/")
+    result = llm.call(
+        [{"role": "user", "content": "Calculate 6 * 7."}],
+        tools=[{"type": "function", "function": {"name": "calculator_tool"}}],
+    )
+
+    assert observed["url"] == "http://ollama:11434/api/chat"
+    assert observed["payload"]["model"] == "llama3.2:3b"
+    assert observed["payload"]["options"]["num_ctx"] == app.OLLAMA_NUM_CTX
+    assert observed["payload"]["tools"][0]["function"]["name"] == "calculator_tool"
+    assert result[0]["type"] == "function"
+    assert result[0]["function"]["name"] == "calculator_tool"
+    assert result[0]["function"]["arguments"] == {"expression": "6 * 7"}
+
+
+def test_native_ollama_llm_converts_openai_tool_history(monkeypatch):
+    captured_payload = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"message":{"content":"done"}}'
+
+    def fake_urlopen(request, timeout):
+        captured_payload.update(json.loads(request.data))
+        return FakeResponse()
+
+    monkeypatch.setattr(app, "urlopen", fake_urlopen)
+    llm = app.make_ollama_llm("ollama/llama3.2:3b", "http://ollama:11434")
+    result = llm.call(
+        [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {
+                    "name": "calculator_tool", "arguments": "{\"expression\":\"6 * 7\"}"
+                }}
+            ]},
+            {"role": "tool", "name": "calculator_tool", "tool_call_id": "call-1", "content": "42"},
+        ]
+    )
+
+    assert result == "done"
+    assert captured_payload["messages"][0]["tool_calls"][0]["function"]["arguments"] == {
+        "expression": "6 * 7"
+    }
+    assert captured_payload["messages"][1]["tool_name"] == "calculator_tool"
+    assert "tool_call_id" not in captured_payload["messages"][1]
+
+
+def test_native_ollama_llm_surfaces_http_errors(monkeypatch):
+    error = HTTPError(
+        "http://ollama:11434/api/chat",
+        503,
+        "model unavailable",
+        {},
+        BytesIO(b"model runner unavailable"),
+    )
+    monkeypatch.setattr(app, "urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(error))
+    llm = app.make_ollama_llm("ollama/llama3.2:3b", "http://ollama:11434")
+    with pytest.raises(RuntimeError, match="Ollama returned HTTP 503: model runner unavailable"):
+        llm.call("Return a short answer.")
+
+
+@pytest.mark.parametrize("value", ["0", "511", "131073", "not-an-integer"])
+def test_ollama_context_config_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv("OLLAMA_NUM_CTX", value)
+    with pytest.raises(ValueError, match="OLLAMA_NUM_CTX"):
+        app.read_ollama_context_size()

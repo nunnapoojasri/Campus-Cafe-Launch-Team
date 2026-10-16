@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, Type
 from urllib.parse import urlencode, urlsplit
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -27,12 +27,26 @@ from pydantic import BaseModel, Field, field_validator
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env", override=False)
+
+
+def read_ollama_context_size() -> int:
+    raw_value = os.getenv("OLLAMA_NUM_CTX", "2048")
+    try:
+        context_size = int(raw_value)
+    except ValueError as exc:
+        raise ValueError("OLLAMA_NUM_CTX must be an integer between 512 and 131072.") from exc
+    if not 512 <= context_size <= 131072:
+        raise ValueError("OLLAMA_NUM_CTX must be an integer between 512 and 131072.")
+    return context_size
+
+
 OUTPUT_PATH = Path(os.getenv("OUTPUT_PATH", str(ROOT / "final_brief.md")))
 REFLECTION_PATH = Path(
     os.getenv("REFLECTION_PATH", str(ROOT / "collaboration_reflection.md"))
 )
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL = os.getenv("CREW_MODEL", "ollama/llama3.2:3b")
+OLLAMA_NUM_CTX = read_ollama_context_size()
 DEMO_MODE = os.getenv("APP_DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
 _JOB_PROCESSES: dict[str, subprocess.Popen[Any]] = {}
 _TASK_COMPLETED = 0
@@ -84,6 +98,125 @@ class ReviewCritique(BaseModel):
 class ReviewedBrief(BaseModel):
     corrections_applied: list[str] = Field(min_length=3, max_length=3)
     final_brief: str = Field(min_length=100, max_length=6000)
+
+
+def make_ollama_llm(model: str, base_url: str) -> Any:
+    """Build a CrewAI LLM that uses Ollama's native API and explicit context sizing."""
+    from crewai import BaseLLM
+
+    class NativeOllamaLLM(BaseLLM):
+        llm_type: str = "ollama_native"
+
+        def call(
+            self,
+            messages: str | list[Any],
+            tools: list[dict[str, Any]] | None = None,
+            callbacks: list[Any] | None = None,
+            available_functions: dict[str, Any] | None = None,
+            from_task: Any = None,
+            from_agent: Any = None,
+            response_model: Type[BaseModel] | None = None,
+        ) -> str | list[dict[str, Any]]:
+            if isinstance(messages, str):
+                native_messages = [{"role": "user", "content": messages}]
+            else:
+                native_messages = []
+                for message in messages:
+                    if isinstance(message, BaseModel):
+                        normalized = message.model_dump(exclude_none=True)
+                    elif isinstance(message, dict):
+                        normalized = dict(message)
+                    else:
+                        normalized = {
+                            key: getattr(message, key)
+                            for key in ("role", "content", "name", "tool_calls", "tool_call_id")
+                            if getattr(message, key, None) is not None
+                        }
+                    if normalized.get("role") == "tool":
+                        normalized["tool_name"] = normalized.pop(
+                            "name", normalized.pop("tool_name", "")
+                        )
+                        normalized.pop("tool_call_id", None)
+                    tool_calls = normalized.get("tool_calls")
+                    if isinstance(tool_calls, list):
+                        native_calls = []
+                        for tool_call in tool_calls:
+                            function = tool_call.get("function", {})
+                            arguments = function.get("arguments", {})
+                            if isinstance(arguments, str):
+                                try:
+                                    arguments = json.loads(arguments)
+                                except json.JSONDecodeError:
+                                    arguments = {}
+                            native_calls.append(
+                                {
+                                    "function": {
+                                        "name": function.get("name", ""),
+                                        "arguments": arguments,
+                                    }
+                                }
+                            )
+                        normalized["tool_calls"] = native_calls
+                    native_messages.append(
+                        {
+                            key: value
+                            for key, value in normalized.items()
+                            if key in {"role", "content", "name", "tool_name", "tool_calls", "images"}
+                        }
+                    )
+
+            payload: dict[str, Any] = {
+                "model": self.model.removeprefix("ollama/"),
+                "messages": native_messages,
+                "stream": False,
+                "options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": self.temperature or 0.2},
+            }
+            if tools:
+                payload["tools"] = tools
+            if response_model is not None:
+                payload["format"] = response_model.model_json_schema()
+            request = Request(
+                f"{base_url.rstrip('/')}/api/chat",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urlopen(request, timeout=180) as response:
+                    result = json.loads(response.read())
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")[:1000]
+                raise RuntimeError(f"Ollama returned HTTP {exc.code}: {detail}") from exc
+            except (URLError, TimeoutError, ValueError) as exc:
+                raise RuntimeError(f"Ollama request failed: {exc}") from exc
+
+            message = result.get("message") or {}
+            returned_calls = message.get("tool_calls") or []
+            if returned_calls:
+                normalized_calls = []
+                for index, call in enumerate(returned_calls):
+                    function = call.get("function", {})
+                    normalized_calls.append(
+                        {
+                            "id": call.get("id") or f"ollama_call_{uuid.uuid4().hex}_{index}",
+                            "type": "function",
+                            "function": {
+                                "name": function.get("name", ""),
+                                "arguments": function.get("arguments", {}),
+                            },
+                        }
+                    )
+                return normalized_calls
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError("Ollama returned neither a tool call nor text output.")
+            return content
+
+    return NativeOllamaLLM(
+        model=model,
+        base_url=base_url,
+        temperature=0.2,
+    )
 
 
 def stop_generation_processes() -> None:
@@ -710,7 +843,7 @@ def create_crew(
             "Run locally with Ollama to use the multi-agent workflow."
         )
 
-    from crewai import Agent, Crew, LLM, Process, Task
+    from crewai import Agent, Crew, Process, Task
     from crewai.tools import BaseTool
     from langchain_core.tools import tool
     from ddgs import DDGS
@@ -840,11 +973,7 @@ def create_crew(
                 "results": [],
             })
 
-    llm = LLM(
-        model=DEFAULT_MODEL,
-        base_url=OLLAMA_BASE_URL,
-        temperature=0.2,
-    )
+    llm = make_ollama_llm(DEFAULT_MODEL, OLLAMA_BASE_URL)
     web_search_tool = wrap_langchain_tool(web_search)
     wikipedia_tool = wrap_langchain_tool(wikipedia_search)
     reference_notes = wrap_langchain_tool(tool(verified_reference_notes))

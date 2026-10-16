@@ -66,6 +66,6 @@ The campus/city and café concept entered in the sidebar are included in researc
 ## Settings and limitations
 
 - Set the campus/city and café concept, then edit enrollment, operating days, average transaction, per-customer variable costs, and fixed costs in the sidebar. These are planning assumptions, not quotes or proof of demand.
-- `CREW_MODEL` and `OLLAMA_BASE_URL` configure the local Ollama-compatible model. No API credential is used by the current local backend.
+- `CREW_MODEL` and `OLLAMA_BASE_URL` configure the local Ollama model. `OLLAMA_NUM_CTX` defaults to `2048` and is applied to native Ollama chat/tool requests to limit memory use; increase it only when the host has enough memory. No API credential is used by the current local backend.
 - Web research uses public DuckDuckGo and Wikipedia endpoints, so network access is needed. Search errors and empty results are surfaced as research limitations; citations must match results actually returned by tools. Curated references are explicitly labeled and do not establish local demand.
 - The supplied `final_brief.md` is an illustrative sample. Validate its assumptions, sources, local prices, staffing, and facilities costs before using it for a funding decision.
