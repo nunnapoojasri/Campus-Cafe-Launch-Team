@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ast
-import contextvars
+import atexit
 import json
 import operator
 import os
-import queue
-import threading
+import subprocess
+import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -25,14 +26,7 @@ OUTPUT_PATH = Path(os.getenv("OUTPUT_PATH", str(ROOT / "final_brief.md")))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL = os.getenv("CREW_MODEL", "ollama/llama3.2:3b")
 DEMO_MODE = os.getenv("APP_DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
-_ACTIVE_JOB_QUEUE: contextvars.ContextVar[Any] = contextvars.ContextVar(
-    "active_job_queue", default=None
-)
-_COMPLETED_TASKS: contextvars.ContextVar[int] = contextvars.ContextVar(
-    "completed_tasks", default=0
-)
-_JOB_QUEUES: dict[str, queue.Queue[tuple[Any, ...]]] = {}
-_JOB_THREADS: dict[str, threading.Thread] = {}
+_JOB_PROCESSES: dict[str, subprocess.Popen[Any]] = {}
 _PROGRESS_STEPS = (
     "Finding useful café and student information",
     "Working out the budget",
@@ -40,6 +34,34 @@ _PROGRESS_STEPS = (
     "Reviewing the details",
     "Finishing your brief",
 )
+
+
+def stop_generation_processes() -> None:
+    for process in _JOB_PROCESSES.values():
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+
+atexit.register(stop_generation_processes)
+
+
+def write_job_status(path: str | Path, **updates: Any) -> None:
+    status_path = Path(path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        current = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        current = {}
+    current.update(updates)
+    current["updated_at"] = time.time()
+    temporary_path = status_path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    temporary_path.write_text(json.dumps(current), encoding="utf-8")
+    temporary_path.replace(status_path)
 
 
 def check_local_model() -> tuple[bool, str]:
@@ -136,22 +158,23 @@ def get_task_output(task: Any) -> str:
 
 
 def publish_task_progress(_: Any) -> None:
-    """Report completed task milestones from CrewAI without updating Streamlit off-thread."""
-    events = _ACTIVE_JOB_QUEUE.get()
-    if events is None:
+    """Write task milestones to disk so the UI can safely poll a worker process."""
+    status_path = os.getenv("CAFE_JOB_STATUS_PATH")
+    if not status_path:
         return
-    completed = min(_COMPLETED_TASKS.get() + 1, len(_PROGRESS_STEPS))
-    _COMPLETED_TASKS.set(completed)
-    events.put(("progress", completed))
+    try:
+        current = json.loads(Path(status_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        current = {"progress": 0}
+    completed = min(int(current.get("progress", 0)) + 1, len(_PROGRESS_STEPS))
+    write_job_status(status_path, state="running", progress=completed)
 
 
 def run_brief_generation(
     job_id: str,
     assumptions: dict[str, Any],
-    events: queue.Queue[tuple[Any, ...]],
+    status_path: str,
 ) -> None:
-    queue_token = _ACTIVE_JOB_QUEUE.set(events)
-    task_token = _COMPLETED_TASKS.set(0)
     try:
         crew, tasks = create_crew(assumptions, task_callback=publish_task_progress)
         result = crew.kickoff()
@@ -159,21 +182,21 @@ def run_brief_generation(
         if not brief:
             raise RuntimeError("The reviewer returned an empty brief.")
         OUTPUT_PATH.write_text(brief + "\n", encoding="utf-8")
-        events.put(
-            (
-                "complete",
-                brief,
-                get_task_output(tasks[3]),
-                get_task_output(tasks[0]),
-                get_task_output(tasks[1]),
-            )
+        write_job_status(
+            status_path,
+            state="complete",
+            progress=len(_PROGRESS_STEPS),
+            brief=brief,
+            critique=get_task_output(tasks[3]),
+            research=get_task_output(tasks[0]),
+            finance=get_task_output(tasks[1]),
         )
     except Exception as exc:
-        events.put(("error", str(exc) or type(exc).__name__))
-    finally:
-        _ACTIVE_JOB_QUEUE.reset(queue_token)
-        _COMPLETED_TASKS.reset(task_token)
-        _JOB_THREADS.pop(job_id, None)
+        write_job_status(
+            status_path,
+            state="error",
+            error=str(exc) or type(exc).__name__,
+        )
 
 
 def create_crew(
@@ -489,33 +512,74 @@ def main() -> None:
         .block-container {max-width: 1120px; padding-top: 2rem; padding-bottom: 3rem;}
         [data-testid="stAppViewContainer"] {
             background:
-                radial-gradient(ellipse at 90% 0%, rgba(190, 128, 76, .13), transparent 34%),
-                #fbf6ed;
+                radial-gradient(ellipse at 8% 3%, rgba(221, 73, 137, .16), transparent 27%),
+                radial-gradient(ellipse at 90% 8%, rgba(96, 82, 195, .16), transparent 29%),
+                radial-gradient(ellipse at 65% 95%, rgba(40, 157, 146, .11), transparent 30%),
+                #180f1b;
         }
-        [data-testid="stHeader"] {background: rgba(251, 246, 237, .88);}
+        [data-testid="stHeader"] {background: rgba(24, 15, 27, .9);}
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #efe1ce 0%, #f6ecdf 100%);
-            border-right: 1px solid #ddc8ad;
+            background:
+                linear-gradient(160deg, rgba(179, 59, 117, .17), transparent 42%),
+                linear-gradient(330deg, rgba(82, 81, 167, .16), transparent 45%),
+                #211524;
+            border-right: 1px solid #56344f;
         }
-        [data-testid="stSidebar"] h2, [data-testid="stSidebar"] label {color: #553822;}
-        h1, h2, h3 {color: #4a2d1c;}
+        [data-testid="stSidebar"] h2, [data-testid="stSidebar"] label {color: #F5DDEC;}
+        [data-testid="stMarkdownContainer"], [data-testid="stCaptionContainer"] {color: #E9DCEB;}
+        h1, h2, h3 {color: #FFF2FA;}
+        h1 {letter-spacing: -.035em;}
+        h1::after {
+            content: "";
+            display: block;
+            width: min(300px, 52vw);
+            height: 4px;
+            margin-top: 10px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #F06C9B, #F4A261, #E9C46A, #66B58B, #58A6C8, #9B7ED8);
+            box-shadow: 0 0 18px rgba(221, 73, 137, .27);
+        }
+        [data-testid="stNumberInput"] input {
+            background: #2D2032;
+            color: #FFF5FC;
+            border-color: #69435F;
+        }
         [data-testid="stMetric"] {
-            background: #fffaf2;
-            border: 1px solid #e5d3bd;
+            background: linear-gradient(145deg, rgba(55, 35, 60, .96), rgba(37, 29, 52, .96));
+            border: 1px solid #684564;
             border-radius: 14px;
             padding: 14px 18px;
         }
         [data-testid="stExpander"] {
-            background: rgba(255, 250, 242, .8);
-            border: 1px solid #e5d3bd;
+            background: rgba(43, 29, 48, .9);
+            border: 1px solid #5B3A57;
             border-radius: 12px;
         }
         .stButton > button, .stDownloadButton > button {
             border-radius: 10px;
             font-weight: 650;
             min-height: 2.8rem;
+            border: 1px solid rgba(247, 224, 242, .28);
+            background: linear-gradient(105deg, #A93870, #82448C 36%, #515FA7 68%, #287F83);
+            color: #FFF8FD;
+            box-shadow: 0 7px 22px rgba(125, 53, 119, .22);
         }
-        [data-testid="stAlert"] {border-radius: 12px;}
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            border-color: #F3B8DA;
+            color: #FFFFFF;
+            filter: brightness(1.12);
+        }
+        [data-testid="stProgress"] > div > div {
+            background: linear-gradient(90deg, #F06C9B, #F4A261, #E9C46A, #66B58B, #58A6C8, #9B7ED8);
+        }
+        [data-testid="stAlert"] {
+            border-radius: 12px;
+            background-color: #2A1D30;
+            border-color: #64445F;
+        }
+        [data-testid="stAlert"] p, [data-testid="stAlert"] span {color: #F7EDF6;}
+        [data-testid="stSpinner"] p {color: #F7EDF6;}
+        hr {border-color: #4B344C;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -584,20 +648,36 @@ def main() -> None:
     ):
         try:
             job_id = uuid.uuid4().hex
-            events: queue.Queue[tuple[Any, ...]] = queue.Queue()
-            worker = threading.Thread(
-                target=run_brief_generation,
-                args=(job_id, assumptions, events),
-                name=f"cafe-brief-{job_id[:8]}",
-                daemon=True,
-            )
-            _JOB_QUEUES[job_id] = events
-            _JOB_THREADS[job_id] = worker
+            job_directory = Path(tempfile.gettempdir()) / "campus-cafe-launch-team"
+            job_directory.mkdir(parents=True, exist_ok=True)
+            status_path = job_directory / f"{job_id}.json"
+            log_path = job_directory / f"{job_id}.log"
+            write_job_status(status_path, state="running", progress=0)
+            worker_environment = os.environ.copy()
+            worker_environment["CAFE_JOB_STATUS_PATH"] = str(status_path)
+            with log_path.open("w", encoding="utf-8") as worker_log:
+                worker = subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(ROOT / "brief_worker.py"),
+                        job_id,
+                        json.dumps(assumptions),
+                        str(status_path),
+                    ],
+                    cwd=ROOT,
+                    env=worker_environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=worker_log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            _JOB_PROCESSES[job_id] = worker
             st.session_state["generation_job_id"] = job_id
+            st.session_state["generation_status_path"] = str(status_path)
+            st.session_state["generation_log_path"] = str(log_path)
             st.session_state["generation_state"] = "running"
             st.session_state["generation_progress"] = 0
             st.session_state["generation_started"] = time.time()
-            worker.start()
         except Exception as exc:
             st.error(
                 "We couldn’t start the brief. Please refresh the page and try again."
@@ -645,40 +725,41 @@ def main() -> None:
 @st.fragment(run_every="1s")
 def render_generation_status() -> None:
     job_id = st.session_state.get("generation_job_id")
-    events = _JOB_QUEUES.get(job_id)
-    if events is None:
+    status_path = Path(st.session_state["generation_status_path"])
+    try:
+        job_status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        job_status = {}
+    process = _JOB_PROCESSES.get(job_id)
+    if process is not None and process.poll() is not None and job_status.get("state") == "running":
+        log_path = Path(st.session_state.get("generation_log_path", ""))
         st.session_state["generation_state"] = "error"
-        st.session_state["generation_error"] = "The brief-writing session ended."
+        st.session_state["generation_error"] = (
+            log_path.read_text(encoding="utf-8")[-1200:]
+            if log_path.is_file()
+            else "The brief-writing process stopped unexpectedly."
+        )
         st.rerun()
         return
-
-    while True:
-        try:
-            event = events.get_nowait()
-        except queue.Empty:
-            break
-        if event[0] == "progress":
-            st.session_state["generation_progress"] = event[1]
-        elif event[0] == "complete":
-            _, brief, critique, research, finance = event
-            st.session_state["brief"] = brief
-            st.session_state["critique"] = critique
-            st.session_state["research"] = research
-            st.session_state["finance"] = finance
-            st.session_state["generation_state"] = "complete"
-            _JOB_QUEUES.pop(job_id, None)
-            _JOB_THREADS.pop(job_id, None)
-            st.rerun(scope="app")
-            return
-        elif event[0] == "error":
-            st.session_state["generation_state"] = "error"
-            st.session_state["generation_error"] = event[1]
-            _JOB_QUEUES.pop(job_id, None)
-            _JOB_THREADS.pop(job_id, None)
-            st.rerun(scope="app")
-            return
-
-    progress = int(st.session_state.get("generation_progress", 0))
+    state = job_status.get("state")
+    if state == "complete":
+        st.session_state["brief"] = job_status["brief"]
+        st.session_state["critique"] = job_status.get("critique", "")
+        st.session_state["research"] = job_status.get("research", "")
+        st.session_state["finance"] = job_status.get("finance", "")
+        st.session_state["generation_state"] = "complete"
+        _JOB_PROCESSES.pop(job_id, None)
+        st.rerun(scope="app")
+        return
+    if state == "error":
+        st.session_state["generation_state"] = "error"
+        st.session_state["generation_error"] = job_status.get(
+            "error", "The brief could not be completed."
+        )
+        _JOB_PROCESSES.pop(job_id, None)
+        st.rerun(scope="app")
+        return
+    progress = int(job_status.get("progress", 0))
     started = float(st.session_state.get("generation_started", time.time()))
     elapsed_seconds = max(0, int(time.time() - started))
     elapsed_minutes = elapsed_seconds // 60

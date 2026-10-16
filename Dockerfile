@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY app.py README.md final_brief.md reflection.md ./
+COPY app.py brief_worker.py README.md final_brief.md reflection.md ./
 COPY .streamlit/config.toml .streamlit/config.toml
 COPY deploy/render-start.sh /usr/local/bin/render-start
 RUN chmod +x /usr/local/bin/render-start

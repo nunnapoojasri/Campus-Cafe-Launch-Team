@@ -33,7 +33,7 @@ streamlit run app.py
 
 Open the local URL printed by Streamlit, normally `http://localhost:8501`. No API key environment variable is read or required.
 
-Creating a brief on a CPU-only computer can take a few minutes. The page stays open and shows plain-language progress updates; the detailed agent and tool logs are hidden.
+Creating a brief on a CPU-only computer can take a few minutes. The page stays responsive while a separate worker prepares the brief, showing plain-language progress updates. Detailed agent and tool logs stay hidden unless an error needs troubleshooting.
 
 ## Deploy the no-cost demo to Render
 
