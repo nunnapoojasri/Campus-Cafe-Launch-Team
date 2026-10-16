@@ -8,7 +8,8 @@ import operator
 import os
 from pathlib import Path
 from typing import Any, Type
-from urllib.error import URLError
+from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 import streamlit as st
@@ -114,7 +115,10 @@ def get_task_output(task: Any) -> str:
     return str(raw if raw is not None else output or "")
 
 
-def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
+def create_crew(
+    assumptions: dict[str, Any],
+    task_callback: Any = None,
+) -> tuple[Any, list[Any]]:
     if DEMO_MODE:
         raise RuntimeError(
             "AI generation is disabled in the no-cost Render demo. "
@@ -123,9 +127,9 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
 
     from crewai import Agent, Crew, LLM, Process, Task
     from crewai.tools import BaseTool
-    from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
-    from langchain_community.utilities import WikipediaAPIWrapper
     from langchain_core.tools import tool
+    from ddgs import DDGS
+    from ddgs.exceptions import DDGSException, TimeoutException
     from pydantic import BaseModel
 
     class ToolInput(BaseModel):
@@ -149,15 +153,57 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
             lc_tool=lc_tool,
         )
 
+    @tool
+    def web_search(query: str) -> str:
+        """Find up to three current web results, with a short request timeout."""
+        try:
+            with DDGS(timeout=5) as search:
+                results = search.text(query, max_results=3, backend="duckduckgo")
+            if not results:
+                return "No web results were returned. Use verified reference notes and disclose the evidence gap."
+            return "\n".join(
+                f"- {item.get('title', 'Untitled')}: {item.get('body', '')} "
+                f"Source: {item.get('href', '')}"
+                for item in results
+            )
+        except (DDGSException, TimeoutException) as exc:
+            return (
+                f"Live web search is unavailable: {exc}. Use verified reference "
+                "notes and disclose the evidence gap; do not invent findings."
+            )
+
+    @tool
+    def wikipedia_search(query: str) -> str:
+        """Search Wikipedia for relevant background pages with a short timeout."""
+        url = "https://en.wikipedia.org/w/api.php?" + urlencode(
+            {
+                "action": "opensearch",
+                "search": query,
+                "limit": 3,
+                "namespace": 0,
+                "format": "json",
+            }
+        )
+        try:
+            with urlopen(url, timeout=5) as response:
+                data = json.loads(response.read())
+            return "\n".join(
+                f"- {title}: {description} Source: {page_url}"
+                for title, description, page_url in zip(data[1], data[2], data[3])
+            ) or "No Wikipedia results were returned."
+        except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            return (
+                f"Wikipedia search is unavailable: {exc}. Use verified reference "
+                "notes and disclose the evidence gap."
+            )
+
     llm = LLM(
         model=DEFAULT_MODEL,
         base_url=OLLAMA_BASE_URL,
         temperature=0.2,
     )
-    web_search = wrap_langchain_tool(DuckDuckGoSearchRun())
-    wikipedia = wrap_langchain_tool(
-        WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper(top_k_results=2))
-    )
+    web_search_tool = wrap_langchain_tool(web_search)
+    wikipedia_tool = wrap_langchain_tool(wikipedia_search)
     reference_notes = wrap_langchain_tool(tool(verified_reference_notes))
     calculator_tool = wrap_langchain_tool(tool(calculator))
 
@@ -171,9 +217,10 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
             "You are a careful campus-retail researcher. You distinguish national "
             "evidence from local demand, cite direct URLs, and never invent a statistic."
         ),
-        tools=[web_search, wikipedia, reference_notes],
+        tools=[web_search_tool, wikipedia_tool, reference_notes],
         llm=llm,
-        verbose=True,
+        verbose=False,
+        max_iter=4,
     )
     analyst = Agent(
         role="Financial Analyst",
@@ -185,7 +232,8 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
         ),
         tools=[calculator_tool],
         llm=llm,
-        verbose=True,
+        verbose=False,
+        max_iter=6,
     )
     writer = Agent(
         role="Marketing Writer",
@@ -195,7 +243,8 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
             "You never turn an assumption into a fact."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
+        max_iter=2,
     )
     reviewer = Agent(
         role="Skeptical Reviewer",
@@ -209,7 +258,8 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
         ),
         llm=llm,
         allow_delegation=True,
-        verbose=True,
+        verbose=False,
+        max_iter=4,
     )
 
     assumption_text = "\n".join(
@@ -312,9 +362,35 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
         agents=[researcher, analyst, writer, reviewer],
         tasks=[research_task, finance_task, draft_task, critique_task, final_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
+        task_callback=task_callback,
     )
     return crew, [research_task, finance_task, draft_task, critique_task, final_task]
+
+
+def make_progress_callback(progress_bar: Any, message: Any) -> Any:
+    steps = [
+        "Finding useful café and student information",
+        "Working out the budget",
+        "Writing a clear proposal",
+        "Reviewing the details",
+        "Finishing your brief",
+    ]
+    completed = 0
+
+    def on_task_complete(_: Any) -> None:
+        nonlocal completed
+        completed += 1
+        progress_bar.progress(
+            completed / len(steps),
+            text=f"{completed} of {len(steps)} steps complete",
+        )
+        if completed < len(steps):
+            message.info(f"Done: {steps[completed - 1]}. Next: {steps[completed].lower()}.")
+        else:
+            message.success("All checks are complete. Preparing your finished brief.")
+
+    return on_task_complete
 
 
 def render_assumptions() -> dict[str, Any]:
@@ -418,6 +494,11 @@ def main() -> None:
         "Four AI specialists research, calculate, write, and challenge the brief "
         "before it is saved."
     )
+    st.caption(
+        "When you generate a brief, your local computer may take a few minutes "
+        "to complete the research and review. Keep this page open; we’ll show "
+        "simple progress updates as the brief comes together."
+    )
 
     with st.expander("How the agent team works", expanded=False):
         st.markdown(
@@ -459,23 +540,23 @@ def main() -> None:
     if st.button(
         "AI generation is disabled in this free demo"
         if DEMO_MODE
-        else "Generate and review launch brief",
+        else "Create my café launch brief",
         type="primary",
         disabled=DEMO_MODE or not model_ready,
         use_container_width=True,
     ):
+        progress_bar = st.progress(0, text="Getting your brief started")
+        progress_message = st.info(
+            "Your team is finding useful café and student information first. This can take a "
+            "little while; you can leave this page open."
+        )
         try:
-            crew, tasks = create_crew(assumptions)
-            with st.status(
-                "Running five linked tasks in sequence: research, analysis, draft, critique, and final review.",
-                expanded=True,
-            ) as status:
+            crew, tasks = create_crew(
+                assumptions,
+                task_callback=make_progress_callback(progress_bar, progress_message),
+            )
+            with st.spinner("Your café brief is being prepared…"):
                 result = crew.kickoff()
-                status.update(
-                    label="Research, financial analysis, drafting, and review complete",
-                    state="complete",
-                    expanded=False,
-                )
             brief = get_task_output(tasks[-1]).strip()
             if not brief:
                 brief = str(result).strip()
@@ -488,14 +569,18 @@ def main() -> None:
             st.session_state["critique"] = get_task_output(tasks[3])
             st.session_state["research"] = get_task_output(tasks[0])
             st.session_state["finance"] = get_task_output(tasks[1])
+            progress_bar.progress(1.0, text="Your brief is ready")
+            progress_message.success("Your reviewed café launch brief is ready below.")
             st.success(f"Final brief saved to `{OUTPUT_PATH.name}`.")
         except Exception as exc:
             st.error(
-                "The launch workflow did not complete. Check that Ollama is running "
-                "with the selected local model, that network search is available, "
-                "and review the error below before trying again."
+                "We couldn’t finish the brief this time. Please check that the "
+                "local café assistant is running, then try again."
             )
-            st.exception(exc)
+            progress_bar.empty()
+            progress_message.empty()
+            with st.expander("More details (optional)"):
+                st.caption(str(exc) or "No additional details were provided.")
 
     if "brief" in st.session_state:
         st.divider()

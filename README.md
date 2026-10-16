@@ -33,6 +33,8 @@ streamlit run app.py
 
 Open the local URL printed by Streamlit, normally `http://localhost:8501`. No API key environment variable is read or required.
 
+Creating a brief on a CPU-only computer can take a few minutes. The page stays open and shows plain-language progress updates; the detailed agent and tool logs are hidden.
+
 ## Deploy the no-cost demo to Render
 
 `render.yaml` configures a free native Python web service. It displays the included reviewed sample brief, but **AI generation is intentionally disabled**: Render's free instance cannot run the local 3B Ollama model. No model API key or paid resource is needed for this demo. The deployment uses `requirements-demo.txt` so the free instance does not load the much larger CrewAI stack.
