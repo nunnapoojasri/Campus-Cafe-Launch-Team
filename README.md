@@ -48,33 +48,17 @@ After pushing this repository to GitHub:
 3. Review that the service uses the **Free** plan, then create the Blueprint.
 4. Open the service's `onrender.com` URL after its health check passes.
 
-To use all four AI agents without an API key, run the app locally with Ollama as described above. The optional Dockerfile and `deploy/render-start.sh` describe a model-hosting setup for a paid server with enough memory and a persistent disk; the free Render Blueprint does not use them.
+To use all five AI agents without an API key, run the app locally with Ollama as described above. The optional Dockerfile and `deploy/render-start.sh` describe a model-hosting setup for a paid server with enough memory and a persistent disk; the free Render Blueprint does not use them.
 
 ## The agent team
 
-1. **Market Researcher** uses LangChain DuckDuckGo Search and Wikipedia tools to gather findings with source links and limitations.
-2. **Financial Analyst** uses a custom LangChain calculator to show every monthly operating break-even step.
-3. **Marketing Writer** combines the findings and calculations into a one-page decision brief.
-4. **Skeptical Reviewer** identifies weaknesses and then produces the final version.
-5. **Sustainability Officer** (enabled by default) checks environmental and plant-based claims before the writer uses them.
+One configured local Ollama model powers five visible specialists: **Market Researcher**, **Financial Analyst**, **Sustainability Officer**, **Marketing Writer**, and **Skeptical Reviewer**. They pass research, calculations, and claim checks into the draft; the reviewer challenges the draft and produces the corrected final brief.
 
-The tasks pass research, calculations, sustainability notes, draft, and critique explicitly through task contexts. The final brief appears in the app, can be downloaded, and is saved as `final_brief.md`. See also the included [sample brief](./final_brief.md) and [collaboration reflection](./reflection.md).
-
-## Student exercises lab
-
-Expand **Student exercises lab** in the app to try all five exercises:
-
-1. Toggle whether the analyst receives the research task as context. The calculation itself remains based on the explicit planning assumptions, so the comparison illustrates information handoff rather than changing the financial inputs.
-2. Enable or remove the Sustainability Officer and inspect the checked claims in the review notes.
-3. Select sequential or hierarchical orchestration for a normal run, or run **Compare sequential vs hierarchical** to produce both versions and compare elapsed time and reported token counts.
-4. Choose a one-time or persistent simulated calculator outage. The analyst is instructed to retry one temporary failure or disclose a persistent failure instead of guessing.
-5. Set the normal reviewer tone to skeptical or enthusiastic, or run **Compare reviewer styles** to inspect both final drafts side by side.
-
-Comparison runs use two complete local-model runs. The page reports elapsed time and token counts when CrewAI provides them, but these are not a quality score. API model charges are $0 with Ollama; electricity and hardware costs are not included. The lab requires Ollama and is intentionally unavailable in the Render Free sample-brief demo. Comparisons are qualitative demonstrations, not controlled evaluations; model output can vary between runs.
+The campus/city and café concept entered in the sidebar are included in research and drafting prompts. Research, calculations, sustainability notes, draft, and critique are passed explicitly through task contexts. The final brief appears in the app, can be downloaded, and is saved as `final_brief.md`. See also the included [sample brief](./final_brief.md) and [collaboration reflection](./reflection.md).
 
 ## Settings and limitations
 
-- Edit enrollment, open days, average transaction, variable costs, and fixed costs in the sidebar. These values are planning assumptions, not quotes or proof of demand.
+- Set the campus/city and café concept, then edit enrollment, open days, average transaction, variable costs, and fixed costs in the sidebar. Financial values are planning assumptions, not quotes or proof of demand.
 - Set `CREW_MODEL` if you have another model installed in Ollama, for example `ollama/qwen2.5:3b`. Set `OLLAMA_BASE_URL` if Ollama is not at `http://localhost:11434`.
 - Web research uses public DuckDuckGo and Wikipedia endpoints, so network access is needed for live search. If those tools are unavailable, the researcher can use a small built-in set of cited reference notes, explicitly disclose the limitation, and avoid inventing local pricing or demand data.
 - The supplied `final_brief.md` is an illustrative sample. Validate its assumptions, sources, local prices, staffing, and facilities costs before using it for a funding decision.

@@ -32,11 +32,12 @@ _TASK_COMPLETED = 0
 _TASK_OFFSET = 0
 _TASK_TOTAL = 1
 _PROGRESS_STEPS = (
-    "Finding useful café and student information",
-    "Working out the budget",
-"Checking sustainability notes",
-"Writing a clear proposal",
-"Reviewing the details",
+    ("Market Researcher", "gathering campus and café evidence"),
+    ("Financial Analyst", "calculating the monthly break-even point"),
+    ("Sustainability Officer", "checking environmental claims"),
+    ("Marketing Writer", "drafting the launch brief"),
+    ("Skeptical Reviewer", "checking risks and evidence"),
+    ("Skeptical Reviewer", "correcting and finalizing the brief"),
 )
 
 
@@ -85,7 +86,7 @@ def check_local_model(
             return True, f"Local model ready: `{configured_model}`"
         return (
             False,
-            f"Ollama is running, but `{DEFAULT_MODEL}` is not installed. "
+            f"Ollama is running, but `{configured_model}` is not installed. "
             f"Run `ollama pull {model_name}`.",
         )
     except (OSError, URLError, TimeoutError, ValueError) as exc:
@@ -496,8 +497,12 @@ def create_crew(
         max_iter=4,
     )
 
+    campus_context = assumptions.get("campus_context") or "campus location not specified"
+    cafe_concept = assumptions.get("cafe_concept") or "café concept not specified"
     assumption_text = "\n".join(
         [
+            f"- Campus / city: {campus_context} (user-provided scenario context).",
+            f"- Café concept: {cafe_concept} (user-provided scenario description).",
             f"- Student population: {assumptions['students']:,} (scenario input; not a demand forecast).",
             f"- Open days per month: {assumptions['open_days']} (planning assumption).",
             f"- Average transaction: ${assumptions['average_ticket']:.2f} (planning assumption; menu prices require local validation).",
@@ -509,7 +514,8 @@ def create_crew(
     research_task = Task(
         description=(
             "Research current evidence for a proposed student café at a university "
-            f"with {assumptions['students']:,} students. Use web search and Wikipedia "
+            f"in {campus_context} with {assumptions['students']:,} students. The proposed "
+            f"concept is: {cafe_concept}. Use web search and Wikipedia "
             "tools to find trustworthy source pages. Cover (a) student food/drink "
             "spending or affordability, (b) typical café menu prices with geography "
             "and date if credible data exists, and (c) 2-3 current café/food trends, "
@@ -592,6 +598,8 @@ def create_crew(
     draft_task = Task(
         description=(
             "Draft a decision-ready, one-page Markdown launch brief for the Dean. "
+            f"Make the recommendation specific to this scenario: {campus_context}; "
+            f"concept: {cafe_concept}. "
             "Use the research findings and financial analysis provided in context. "
             "Include an executive recommendation, evidence-led opportunity, concise "
             "pricing/trend implications, break-even arithmetic with assumptions, "
@@ -677,6 +685,15 @@ def render_assumptions() -> dict[str, Any]:
     students = st.sidebar.number_input(
         "Enrolled students", min_value=1, value=8000, step=100
     )
+    campus_context = st.sidebar.text_input(
+        "Campus / city", value="Your campus", max_chars=120
+    )
+    cafe_concept = st.sidebar.text_area(
+        "What is your café idea?",
+        value="A welcoming campus café with affordable coffee, quick meals, and plant-based options.",
+        max_chars=500,
+        height=100,
+    )
     open_days = st.sidebar.number_input(
         "Open days per month", min_value=1, max_value=31, value=22, step=1
     )
@@ -710,6 +727,8 @@ def render_assumptions() -> dict[str, Any]:
     )
     return {
         "students": int(students),
+        "campus_context": campus_context.strip(),
+        "cafe_concept": cafe_concept.strip(),
         "open_days": int(open_days),
         "average_ticket": float(average_ticket),
         "variable_cost_pct": float(variable_cost_pct),
@@ -789,17 +808,6 @@ def main() -> None:
         [data-testid="stProgress"] > div > div {
             background: linear-gradient(90deg, #F06C9B, #F4A261, #E9C46A, #66B58B, #58A6C8, #9B7ED8);
         }
-        .cafe-step-card {
-            min-height: 220px;
-            padding: 14px 16px;
-            border: 1px solid #E7D8E8;
-            border-radius: 16px;
-            background: linear-gradient(150deg, #FFFFFF, #FBF4FA);
-            box-shadow: 0 8px 22px rgba(99, 56, 92, .07);
-        }
-        .cafe-step-card img {height: 104px; width: 100%; object-fit: contain;}
-        .cafe-step-card h4 {margin: 8px 0 4px; color: #53334C;}
-        .cafe-step-card p {margin: 0; color: #625367; font-size: .92rem;}
         [data-testid="stAlert"] {
             border-radius: 12px;
             background-color: #F7EFF7;
@@ -830,111 +838,32 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    step_columns = st.columns(3)
-    steps = [
-        (
-            "research.svg",
-            "1. Find useful evidence",
-            "Look for student needs, café choices, and current food trends.",
-        ),
-        (
-            "budget.svg",
-            "2. Check the numbers",
-            "Show what it could take to cover the café’s monthly costs.",
-        ),
-        (
-            "brief.svg",
-            "3. Review the brief",
-            "Turn the findings into a concise proposal and check its weak spots.",
-        ),
-    ]
-    for column, (image_name, title, description) in zip(step_columns, steps):
-        with column:
-            st.markdown(
-                f'<div class="cafe-step-card">'
-                f'<img src="{read_illustration(image_name)}" alt="">'
-                f"<h4>{title}</h4><p>{description}</p></div>",
-                unsafe_allow_html=True,
-            )
+    st.subheader("Your AI team")
     st.caption(
-        "Tip: the numbers in the sidebar are editable planning assumptions, "
-        "not supplier quotes or proof of student demand."
+        f"Five specialists collaborate using one local Ollama model ({DEFAULT_MODEL}). "
+        "Research and calculations are handed forward into the draft and review."
     )
-
-    with st.expander("How the agent team works", expanded=False):
-        st.markdown(
-            "- **Market Researcher** searches for student, pricing, and trend evidence.\n"
-            "- **Financial Analyst** uses a calculator tool to show every break-even step.\n"
-            "- **Sustainability Officer** checks environmental claims when enabled.\n"
-            "- **Marketing Writer** turns both handoffs into a one-page brief.\n"
-            "- **Skeptical Reviewer** identifies weaknesses, then produces the final version.\n\n"
-            "The research and financial outputs are passed explicitly to the next tasks. "
-            "National evidence is not treated as proof of local demand. If public search "
-            "is unavailable, the researcher has a small, cited local reference pack and "
-            "is instructed to disclose that it was used."
-        )
+    agent_columns = st.columns(5)
+    agents = [
+        ("Market Researcher", "Finds evidence and cites its limits."),
+        ("Financial Analyst", "Calculates an auditable break-even."),
+        ("Sustainability Officer", "Checks environmental claims."),
+        ("Marketing Writer", "Builds the decision-ready brief."),
+        ("Skeptical Reviewer", "Challenges gaps and corrects the draft."),
+    ]
+    for column, (role, description) in zip(agent_columns, agents):
+        with column:
+            with st.container(border=True):
+                st.markdown(f"**{role}**")
+                st.caption(description)
 
     model_ready, model_status = check_local_model(
         OLLAMA_BASE_URL, DEFAULT_MODEL
     ) if not DEMO_MODE else (
         False,
-        "No-cost Render demo: AI generation is disabled; the reviewed sample brief is shown below.",
+        "Hosted sample mode: the reviewed example is shown here. Run the app locally with Ollama to generate a brief.",
     )
     generation_running = st.session_state.get("generation_state") == "running"
-    with st.expander("Student exercises lab", expanded=False):
-        st.write(
-            "Explore the five classroom exercises. Comparison runs create separate "
-            "drafts so you can judge the differences side by side."
-        )
-        share_research = st.checkbox(
-            "1. Give the Financial Analyst the research handoff",
-            value=True,
-            help=(
-                "Turn this off to compare the workflow when the analyst receives "
-                "only the planning assumptions."
-            ),
-        )
-        include_sustainability = st.checkbox(
-            "2. Add the Sustainability Officer",
-            value=True,
-            help="The officer checks environmental and plant-based claims before drafting.",
-        )
-        process_label = st.selectbox(
-            "3. Process used for a normal brief",
-            ("Sequential (agents take turns)", "Hierarchical (manager coordinates)"),
-            index=0,
-        )
-        calculator_failure_label = st.selectbox(
-            "4. Calculator behavior",
-            (
-                "Works normally",
-                "Fails once, then can recover",
-                "Keeps failing",
-            ),
-            index=0,
-            help=(
-                "A controlled simulation: the analyst is instructed to retry a "
-                "temporary failure or disclose a persistent failure."
-            ),
-        )
-        reviewer_label = st.selectbox(
-            "5. Reviewer style used for a normal brief",
-            ("Skeptical reviewer", "Enthusiastic cheerleader"),
-            index=0,
-        )
-        compare_columns = st.columns(2)
-        with compare_columns[0]:
-            compare_processes_clicked = st.button(
-                "Compare sequential vs hierarchical",
-                disabled=DEMO_MODE or not model_ready or generation_running,
-                use_container_width=True,
-            )
-        with compare_columns[1]:
-            compare_reviewers_clicked = st.button(
-                "Compare reviewer styles",
-                disabled=DEMO_MODE or not model_ready or generation_running,
-                use_container_width=True,
-            )
 
     if DEMO_MODE:
         st.info(model_status)
@@ -965,42 +894,13 @@ def main() -> None:
         disabled=DEMO_MODE or not model_ready or generation_running,
         use_container_width=True,
     )
-    experiment = (
-        "compare_processes"
-        if compare_processes_clicked
-        else "compare_reviewers"
-        if compare_reviewers_clicked
-        else "brief"
-    )
-    should_start = (
-        clicked_normal or compare_processes_clicked or compare_reviewers_clicked
-    )
-    if should_start:
+    if clicked_normal:
         try:
             job_id = uuid.uuid4().hex
             job_directory = Path(tempfile.gettempdir()) / "campus-cafe-launch-team"
             job_directory.mkdir(parents=True, exist_ok=True)
             status_path = job_directory / f"{job_id}.json"
             log_path = job_directory / f"{job_id}.log"
-            options = {
-                "share_research": share_research,
-                "include_sustainability": include_sustainability,
-                "process_mode": (
-                    "hierarchical"
-                    if process_label.startswith("Hierarchical")
-                    else "sequential"
-                ),
-                "reviewer_tone": (
-                    "cheerleader"
-                    if reviewer_label.startswith("Enthusiastic")
-                    else "skeptical"
-                ),
-                "calculator_failure": {
-                    "Works normally": "none",
-                    "Fails once, then can recover": "fail_once",
-                    "Keeps failing": "always_fail",
-                }[calculator_failure_label],
-            }
             write_job_status(
                 status_path,
                 state="running",
@@ -1018,8 +918,8 @@ def main() -> None:
                         job_id,
                         json.dumps(assumptions),
                         str(status_path),
-                        json.dumps(options),
-                        experiment,
+                        json.dumps({}),
+                        "brief",
                     ],
                     cwd=ROOT,
                     env=worker_environment,
@@ -1036,7 +936,6 @@ def main() -> None:
             st.session_state["generation_progress"] = 0
             st.session_state["generation_started"] = time.time()
             st.session_state["generation_experiment"] = experiment
-            st.session_state["generation_exercise_result"] = None
         except Exception as exc:
             st.error(
                 "We couldn’t start the brief. Please refresh the page and try again."
@@ -1047,10 +946,7 @@ def main() -> None:
     if st.session_state.get("generation_state") == "running":
         render_generation_status()
     elif st.session_state.get("generation_state") == "complete":
-        if st.session_state.get("generation_exercise_result"):
-            st.success("Your exercise comparison is ready below.")
-        else:
-            st.success("Your reviewed café launch brief is ready below.")
+        st.success("Your reviewed café launch brief is ready below.")
     elif st.session_state.get("generation_state") == "error":
         st.error(
             "We couldn’t finish your brief. Please try again; if it keeps "
@@ -1079,31 +975,6 @@ def main() -> None:
             if st.session_state.get("sustainability"):
                 st.markdown("**Sustainability check**")
                 st.write(st.session_state["sustainability"])
-
-    exercise_result = st.session_state.get("generation_exercise_result")
-    if exercise_result:
-        st.divider()
-        st.subheader("Exercise comparison")
-        st.caption(exercise_result.get("cost_note", ""))
-        results = exercise_result.get("results", [])
-        for start in range(0, len(results), 2):
-            comparison_columns = st.columns(min(2, len(results) - start))
-            for column, result in zip(comparison_columns, results[start : start + 2]):
-                with column:
-                    st.markdown(f"#### {result['name']}")
-                    token_count = result["usage"].get("total_tokens", 0)
-                    token_label = f"{token_count:,}" if token_count else "not reported"
-                    st.caption(
-                        f"Run time: {result['duration_seconds']} seconds · "
-                        f"Tasks: {result['task_count']} · "
-                        f"Tokens: {token_label}"
-                    )
-                    st.markdown(result["brief"])
-        st.info(
-            "Compare the evidence, risk discussion, assumptions, and final "
-            "recommendations yourself; run time and token counts describe effort, "
-            "not quality."
-        )
 
     st.divider()
     st.caption(
@@ -1139,10 +1010,6 @@ def render_generation_status() -> None:
             st.session_state["research"] = job_status.get("research", "")
             st.session_state["finance"] = job_status.get("finance", "")
             st.session_state["sustainability"] = job_status.get("sustainability", "")
-        if job_status.get("exercise_result"):
-            st.session_state["generation_exercise_result"] = job_status[
-                "exercise_result"
-            ]
         st.session_state["generation_state"] = "complete"
         _JOB_PROCESSES.pop(job_id, None)
         st.rerun(scope="app")
@@ -1158,10 +1025,7 @@ def render_generation_status() -> None:
     completed = int(job_status.get("completed_tasks", 0))
     total = max(1, int(job_status.get("total_tasks", 1)))
     progress = min(1.0, completed / total)
-    stage_index = min(
-        len(_PROGRESS_STEPS) - 1,
-        int(progress * len(_PROGRESS_STEPS)),
-    )
+    stage_index = min(len(_PROGRESS_STEPS) - 1, completed)
     started = float(st.session_state.get("generation_started", time.time()))
     elapsed_seconds = max(0, int(time.time() - started))
     elapsed_minutes = elapsed_seconds // 60
@@ -1171,9 +1035,7 @@ def render_generation_status() -> None:
         if elapsed_minutes
         else "Just getting started"
     )
-    current_step = (
-        "Getting started" if completed == 0 else _PROGRESS_STEPS[stage_index]
-    )
+    current_agent, current_step = _PROGRESS_STEPS[stage_index]
     st.progress(
         progress,
         text=(
@@ -1183,7 +1045,7 @@ def render_generation_status() -> None:
         ),
     )
     st.info(
-        f"**{current_step}.** Your café brief is being prepared. "
+        f"**{current_agent} is {current_step}.** Your café brief is being prepared. "
         f"{elapsed}. Local models can take a few minutes; "
         "you can keep this page open."
     )
