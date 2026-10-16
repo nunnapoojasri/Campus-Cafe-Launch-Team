@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import ast
+import contextvars
 import json
 import operator
 import os
+import queue
+import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Type
 from urllib.parse import urlencode
@@ -20,6 +25,21 @@ OUTPUT_PATH = Path(os.getenv("OUTPUT_PATH", str(ROOT / "final_brief.md")))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL = os.getenv("CREW_MODEL", "ollama/llama3.2:3b")
 DEMO_MODE = os.getenv("APP_DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
+_ACTIVE_JOB_QUEUE: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "active_job_queue", default=None
+)
+_COMPLETED_TASKS: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "completed_tasks", default=0
+)
+_JOB_QUEUES: dict[str, queue.Queue[tuple[Any, ...]]] = {}
+_JOB_THREADS: dict[str, threading.Thread] = {}
+_PROGRESS_STEPS = (
+    "Finding useful café and student information",
+    "Working out the budget",
+    "Writing a clear proposal",
+    "Reviewing the details",
+    "Finishing your brief",
+)
 
 
 def check_local_model() -> tuple[bool, str]:
@@ -113,6 +133,47 @@ def get_task_output(task: Any) -> str:
     output = getattr(task, "output", None)
     raw = getattr(output, "raw", None)
     return str(raw if raw is not None else output or "")
+
+
+def publish_task_progress(_: Any) -> None:
+    """Report completed task milestones from CrewAI without updating Streamlit off-thread."""
+    events = _ACTIVE_JOB_QUEUE.get()
+    if events is None:
+        return
+    completed = min(_COMPLETED_TASKS.get() + 1, len(_PROGRESS_STEPS))
+    _COMPLETED_TASKS.set(completed)
+    events.put(("progress", completed))
+
+
+def run_brief_generation(
+    job_id: str,
+    assumptions: dict[str, Any],
+    events: queue.Queue[tuple[Any, ...]],
+) -> None:
+    queue_token = _ACTIVE_JOB_QUEUE.set(events)
+    task_token = _COMPLETED_TASKS.set(0)
+    try:
+        crew, tasks = create_crew(assumptions, task_callback=publish_task_progress)
+        result = crew.kickoff()
+        brief = get_task_output(tasks[-1]).strip() or str(result).strip()
+        if not brief:
+            raise RuntimeError("The reviewer returned an empty brief.")
+        OUTPUT_PATH.write_text(brief + "\n", encoding="utf-8")
+        events.put(
+            (
+                "complete",
+                brief,
+                get_task_output(tasks[3]),
+                get_task_output(tasks[0]),
+                get_task_output(tasks[1]),
+            )
+        )
+    except Exception as exc:
+        events.put(("error", str(exc) or type(exc).__name__))
+    finally:
+        _ACTIVE_JOB_QUEUE.reset(queue_token)
+        _COMPLETED_TASKS.reset(task_token)
+        _JOB_THREADS.pop(job_id, None)
 
 
 def create_crew(
@@ -368,31 +429,6 @@ def create_crew(
     return crew, [research_task, finance_task, draft_task, critique_task, final_task]
 
 
-def make_progress_callback(progress_bar: Any, message: Any) -> Any:
-    steps = [
-        "Finding useful café and student information",
-        "Working out the budget",
-        "Writing a clear proposal",
-        "Reviewing the details",
-        "Finishing your brief",
-    ]
-    completed = 0
-
-    def on_task_complete(_: Any) -> None:
-        nonlocal completed
-        completed += 1
-        progress_bar.progress(
-            completed / len(steps),
-            text=f"{completed} of {len(steps)} steps complete",
-        )
-        if completed < len(steps):
-            message.info(f"Done: {steps[completed - 1]}. Next: {steps[completed].lower()}.")
-        else:
-            message.success("All checks are complete. Preparing your finished brief.")
-
-    return on_task_complete
-
-
 def render_assumptions() -> dict[str, Any]:
     st.sidebar.header("Planning assumptions")
     st.sidebar.caption(
@@ -537,50 +573,49 @@ def main() -> None:
         f"Open {assumptions['open_days']} days/month"
     )
 
+    generation_running = st.session_state.get("generation_state") == "running"
     if st.button(
         "AI generation is disabled in this free demo"
         if DEMO_MODE
         else "Create my café launch brief",
         type="primary",
-        disabled=DEMO_MODE or not model_ready,
+        disabled=DEMO_MODE or not model_ready or generation_running,
         use_container_width=True,
     ):
-        progress_bar = st.progress(0, text="Getting your brief started")
-        progress_message = st.info(
-            "Your team is finding useful café and student information first. This can take a "
-            "little while; you can leave this page open."
-        )
         try:
-            crew, tasks = create_crew(
-                assumptions,
-                task_callback=make_progress_callback(progress_bar, progress_message),
+            job_id = uuid.uuid4().hex
+            events: queue.Queue[tuple[Any, ...]] = queue.Queue()
+            worker = threading.Thread(
+                target=run_brief_generation,
+                args=(job_id, assumptions, events),
+                name=f"cafe-brief-{job_id[:8]}",
+                daemon=True,
             )
-            with st.spinner("Your café brief is being prepared…"):
-                result = crew.kickoff()
-            brief = get_task_output(tasks[-1]).strip()
-            if not brief:
-                brief = str(result).strip()
-            if not brief:
-                raise RuntimeError(
-                    "The final reviewer returned an empty brief. No output file was saved."
-                )
-            OUTPUT_PATH.write_text(brief + "\n", encoding="utf-8")
-            st.session_state["brief"] = brief
-            st.session_state["critique"] = get_task_output(tasks[3])
-            st.session_state["research"] = get_task_output(tasks[0])
-            st.session_state["finance"] = get_task_output(tasks[1])
-            progress_bar.progress(1.0, text="Your brief is ready")
-            progress_message.success("Your reviewed café launch brief is ready below.")
-            st.success(f"Final brief saved to `{OUTPUT_PATH.name}`.")
+            _JOB_QUEUES[job_id] = events
+            _JOB_THREADS[job_id] = worker
+            st.session_state["generation_job_id"] = job_id
+            st.session_state["generation_state"] = "running"
+            st.session_state["generation_progress"] = 0
+            st.session_state["generation_started"] = time.time()
+            worker.start()
         except Exception as exc:
             st.error(
-                "We couldn’t finish the brief this time. Please check that the "
-                "local café assistant is running, then try again."
+                "We couldn’t start the brief. Please refresh the page and try again."
             )
-            progress_bar.empty()
-            progress_message.empty()
             with st.expander("More details (optional)"):
                 st.caption(str(exc) or "No additional details were provided.")
+
+    if st.session_state.get("generation_state") == "running":
+        render_generation_status()
+    elif st.session_state.get("generation_state") == "complete":
+        st.success("Your reviewed café launch brief is ready below.")
+    elif st.session_state.get("generation_state") == "error":
+        st.error(
+            "We couldn’t finish your brief. Please try again; if it keeps "
+            "happening, check that the local assistant is running."
+        )
+        with st.expander("More details (optional)"):
+            st.caption(st.session_state.get("generation_error", "No additional details."))
 
     if "brief" in st.session_state:
         st.divider()
@@ -605,6 +640,67 @@ def main() -> None:
         "Decision support only: validate local demand, supplier prices, labor, "
         "facilities, and university policies before committing funds."
     )
+
+
+@st.fragment(run_every="1s")
+def render_generation_status() -> None:
+    job_id = st.session_state.get("generation_job_id")
+    events = _JOB_QUEUES.get(job_id)
+    if events is None:
+        st.session_state["generation_state"] = "error"
+        st.session_state["generation_error"] = "The brief-writing session ended."
+        st.rerun()
+        return
+
+    while True:
+        try:
+            event = events.get_nowait()
+        except queue.Empty:
+            break
+        if event[0] == "progress":
+            st.session_state["generation_progress"] = event[1]
+        elif event[0] == "complete":
+            _, brief, critique, research, finance = event
+            st.session_state["brief"] = brief
+            st.session_state["critique"] = critique
+            st.session_state["research"] = research
+            st.session_state["finance"] = finance
+            st.session_state["generation_state"] = "complete"
+            _JOB_QUEUES.pop(job_id, None)
+            _JOB_THREADS.pop(job_id, None)
+            st.rerun(scope="app")
+            return
+        elif event[0] == "error":
+            st.session_state["generation_state"] = "error"
+            st.session_state["generation_error"] = event[1]
+            _JOB_QUEUES.pop(job_id, None)
+            _JOB_THREADS.pop(job_id, None)
+            st.rerun(scope="app")
+            return
+
+    progress = int(st.session_state.get("generation_progress", 0))
+    started = float(st.session_state.get("generation_started", time.time()))
+    elapsed_seconds = max(0, int(time.time() - started))
+    elapsed_minutes = elapsed_seconds // 60
+    elapsed = (
+        f"It has been working for {elapsed_minutes} "
+        f"{'minute' if elapsed_minutes == 1 else 'minutes'}"
+        if elapsed_minutes
+        else "Just getting started"
+    )
+    if progress < len(_PROGRESS_STEPS):
+        current_step = _PROGRESS_STEPS[progress]
+        step_label = (
+            "Getting started"
+            if progress == 0
+            else f"{progress} of {len(_PROGRESS_STEPS)} steps complete"
+        )
+        st.progress(progress / len(_PROGRESS_STEPS), text=step_label)
+        st.info(
+            f"**{current_step}.** Your café brief is being prepared. "
+            f"{elapsed}. Local models can take a few minutes; "
+            "you can keep this page open."
+        )
 
 
 if __name__ == "__main__":
