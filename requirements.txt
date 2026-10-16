@@ -1,0 +1,8 @@
+crewai>=0.130,<2
+litellm>=1.74,<2
+langchain-community>=0.3,<2
+langchain-core>=0.3,<2
+ddgs>=9,<10
+wikipedia>=1.4,<2
+streamlit>=1.40,<2
+pydantic>=2.7,<3

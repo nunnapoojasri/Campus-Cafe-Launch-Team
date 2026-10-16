@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: campus-cafe-launch-team
+    runtime: docker
+    plan: pro
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /_stcore/health
+    disk:
+      name: ollama-models
+      mountPath: /var/data
+      sizeGB: 10
