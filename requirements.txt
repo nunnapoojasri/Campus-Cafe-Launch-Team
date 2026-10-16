@@ -6,3 +6,5 @@ ddgs>=9,<10
 wikipedia>=1.4,<2
 streamlit>=1.40,<2
 pydantic>=2.7,<3
+python-dotenv>=1,<2
+pytest>=8,<9

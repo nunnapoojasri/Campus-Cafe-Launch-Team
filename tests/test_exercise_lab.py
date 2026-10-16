@@ -63,13 +63,13 @@ class CrewExerciseConfigurationTests(unittest.TestCase):
             crew, tasks = app.create_crew(ASSUMPTIONS, options=options)
         return crew, tasks, agent_factory, task_factory, crew_factory
 
-    def test_research_handoff_can_be_removed_and_sustainability_agent_added(self):
+    def test_research_handoff_is_mandatory_and_sustainability_is_optional(self):
         _, tasks, agents, task_factory, _ = self.build_crew(
             {"share_research": False, "include_sustainability": True}
         )
         self.assertEqual(agents.call_count, 5)
         self.assertEqual(len(tasks), 6)
-        self.assertEqual(task_factory.call_args_list[1].kwargs["context"], [])
+        self.assertEqual(task_factory.call_args_list[1].kwargs["context"], [tasks[0]])
         self.assertEqual(
             tasks[2].agent.role,
             "Sustainability Officer",
@@ -86,11 +86,11 @@ class CrewExerciseConfigurationTests(unittest.TestCase):
         self.assertEqual(len(tasks), 5)
         self.assertEqual(task_factory.call_args_list[1].kwargs["context"], [tasks[0]])
 
-    def test_hierarchical_mode_supplies_manager_llm(self):
+    def test_sequential_mode_is_enforced(self):
         _, _, _, _, crew_factory = self.build_crew({"process_mode": "hierarchical"})
         crew_config = crew_factory.call_args.kwargs
-        self.assertEqual(crew_config["process"], crewai.Process.hierarchical)
-        self.assertIn("manager_llm", crew_config)
+        self.assertEqual(crew_config["process"], crewai.Process.sequential)
+        self.assertNotIn("manager_llm", crew_config)
 
     def test_reviewer_tone_switch_changes_reviewer_backstory(self):
         _, _, agents, _, _ = self.build_crew({"reviewer_tone": "cheerleader"})

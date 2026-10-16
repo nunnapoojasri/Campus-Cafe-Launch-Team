@@ -1,64 +1,71 @@
-# Campus Café Launch Team
+# Campus Café Launch Intelligence
 
 A cafe-themed Streamlit app that coordinates up to five CrewAI agents to create a reviewed launch brief. It uses a **local Ollama language model**, so no OpenAI account, API key, or paid model endpoint is required.
 
-## Get started
+## Local setup
 
-### 1. Install Ollama and download a local model
+Python 3.12 is recommended. Install [Ollama](https://ollama.com/download), start it, and download the default local model once:
 
-Install Ollama from [ollama.com/download](https://ollama.com/download), then in a terminal:
-
-```bash
+```powershell
 ollama pull llama3.2:3b
 ```
 
-Keep Ollama running. If it does not start automatically, run `ollama serve` in a separate terminal. The model is downloaded once and then inference runs locally. The default model is `ollama/llama3.2:3b`.
+From PowerShell in the repository, create and activate a virtual environment, install dependencies, and copy the environment template:
 
-### 2. Install Python dependencies
-
-Python 3.10–3.13 is supported; Python 3.12 is recommended.
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-### 3. Start the application
+If PowerShell blocks activation, use `Set-ExecutionPolicy -Scope Process Bypass` for that terminal session, then activate again. The `.env` file contains configuration only; do not put secrets in it or commit it.
 
-```bash
+On macOS/Linux, activate with `source .venv/bin/activate` after creating the environment with `python3.12 -m venv .venv`.
+
+Run the tests and start the app:
+
+```powershell
+python -m pytest -q
 streamlit run app.py
 ```
 
-Open the local URL printed by Streamlit, normally `http://localhost:8501`. No API key environment variable is read or required.
+Open the URL printed by Streamlit, normally `http://localhost:8501`. The default backend is local Ollama (`CREW_MODEL=ollama/llama3.2:3b`, `OLLAMA_BASE_URL=http://localhost:11434`); no API key is required or read. Override those values in `.env` to use another model already available from an Ollama-compatible endpoint. System environment variables take precedence over `.env`.
 
-Creating a brief on a CPU-only computer can take a few minutes. The page stays responsive while a separate worker prepares the brief, showing plain-language progress updates. Detailed agent and tool logs stay hidden unless an error needs troubleshooting.
+The app writes generated reports to `final_brief.md` and `collaboration_reflection.md` in the repository by default. Set `OUTPUT_PATH` and `REFLECTION_PATH` to change those locations. A run is marked complete only after review passes and both writes succeed; a report-writing failure is shown as a failed run, not a success.
 
-The interface uses a light tulip-inspired palette and bundled café illustrations. The images load locally, so the page does not wait on an external image service. Model availability checks are cached briefly, and progress updates poll every two seconds.
+The dashboard has Overview, Market Research, Financial Planner, Agent Workflow, Final Brief, and Reflection sections. Local generation uses a background worker; the UI shows actual task outputs and failures rather than simulated completion.
 
-## Deploy the no-cost demo to Render
+## Render deployment
 
-`render.yaml` configures a free native Python web service. It displays the included reviewed sample brief, but **AI generation is intentionally disabled**: Render's free instance cannot run the local 3B Ollama model. No model API key or paid resource is needed for this demo. The deployment uses `requirements-demo.txt` so the free instance does not load the much larger CrewAI stack.
+The existing `render.yaml` is intentionally preserved as a Free sample deployment. It does not run AI: an Ollama model installed on your PC is not available to a Render instance. No API key or secret is required for this sample mode.
 
-After pushing this repository to GitHub:
+Exact Blueprint commands:
 
-1. Open the [Render Blueprint dashboard](https://dashboard.render.com/blueprints).
-2. Select **New Blueprint Instance** and connect `nunnapoojasri/Campus-Cafe-Launch-Team`.
-3. Review that the service uses the **Free** plan, then create the Blueprint.
-4. Open the service's `onrender.com` URL after its health check passes.
+```text
+Build: pip install -r requirements-demo.txt
+Start: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT
+Health check: /_stcore/health
+```
 
-To use all five AI agents without an API key, run the app locally with Ollama as described above. The optional Dockerfile and `deploy/render-start.sh` describe a model-hosting setup for a paid server with enough memory and a persistent disk; the free Render Blueprint does not use them.
+Configure this environment variable in the Render dashboard (also declared by the Blueprint):
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `APP_DEMO_MODE` | `true` | Shows the reviewed sample and disables local-model generation. |
+
+Do not add `OLLAMA_BASE_URL` or `CREW_MODEL` to the free Render service expecting it to reach your computer. Live hosted generation requires a separately hosted, network-reachable model service; this repository's Render Blueprint does not configure one. The optional Dockerfile and `deploy/render-start.sh` are a different, resource-intensive model-hosting path and are not used by the free Blueprint.
 
 ## The agent team
 
-One configured local Ollama model powers five visible specialists: **Market Researcher**, **Financial Analyst**, **Sustainability Officer**, **Marketing Writer**, and **Skeptical Reviewer**. They pass research, calculations, and claim checks into the draft; the reviewer challenges the draft and produces the corrected final brief.
+One configured local Ollama model powers four primary specialists: **Market Researcher**, **Financial Analyst**, **Marketing Writer**, and **Skeptical Reviewer**. Research feeds finance; both feed the draft; the reviewer receives the draft and upstream evidence/calculations, records three corrections, and produces a corrected final brief. The reviewer checks sustainability claims as part of its review.
 
 The campus/city and café concept entered in the sidebar are included in research and drafting prompts. Research, calculations, sustainability notes, draft, and critique are passed explicitly through task contexts. The final brief appears in the app, can be downloaded, and is saved as `final_brief.md`. See also the included [sample brief](./final_brief.md) and [collaboration reflection](./reflection.md).
 
 ## Settings and limitations
 
-- Set the campus/city and café concept, then edit enrollment, open days, average transaction, variable costs, and fixed costs in the sidebar. Financial values are planning assumptions, not quotes or proof of demand.
-- Set `CREW_MODEL` if you have another model installed in Ollama, for example `ollama/qwen2.5:3b`. Set `OLLAMA_BASE_URL` if Ollama is not at `http://localhost:11434`.
-- Web research uses public DuckDuckGo and Wikipedia endpoints, so network access is needed for live search. If those tools are unavailable, the researcher can use a small built-in set of cited reference notes, explicitly disclose the limitation, and avoid inventing local pricing or demand data.
+- Set the campus/city and café concept, then edit enrollment, operating days, average transaction, per-customer variable costs, and fixed costs in the sidebar. These are planning assumptions, not quotes or proof of demand.
+- `CREW_MODEL` and `OLLAMA_BASE_URL` configure the local Ollama-compatible model. No API credential is used by the current local backend.
+- Web research uses public DuckDuckGo and Wikipedia endpoints, so network access is needed. Search errors and empty results are surfaced as research limitations; citations must match results actually returned by tools. Curated references are explicitly labeled and do not establish local demand.
 - The supplied `final_brief.md` is an illustrative sample. Validate its assumptions, sources, local prices, staffing, and facilities costs before using it for a funding decision.
