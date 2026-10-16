@@ -1,6 +1,6 @@
 # Campus Café Launch Team
 
-A cafe-themed Streamlit app that coordinates four CrewAI agents to create a reviewed launch brief. It uses a **local Ollama language model**, so no OpenAI account, API key, or paid model endpoint is required.
+A cafe-themed Streamlit app that coordinates up to five CrewAI agents to create a reviewed launch brief. It uses a **local Ollama language model**, so no OpenAI account, API key, or paid model endpoint is required.
 
 ## Get started
 
@@ -56,8 +56,21 @@ To use all four AI agents without an API key, run the app locally with Ollama as
 2. **Financial Analyst** uses a custom LangChain calculator to show every monthly operating break-even step.
 3. **Marketing Writer** combines the findings and calculations into a one-page decision brief.
 4. **Skeptical Reviewer** identifies weaknesses and then produces the final version.
+5. **Sustainability Officer** (enabled by default) checks environmental and plant-based claims before the writer uses them.
 
-The five tasks run sequentially, passing research, calculations, draft, and critique explicitly through task contexts. The final brief appears in the app, can be downloaded, and is saved as `final_brief.md`. See also the included [sample brief](./final_brief.md) and [collaboration reflection](./reflection.md).
+The tasks pass research, calculations, sustainability notes, draft, and critique explicitly through task contexts. The final brief appears in the app, can be downloaded, and is saved as `final_brief.md`. See also the included [sample brief](./final_brief.md) and [collaboration reflection](./reflection.md).
+
+## Student exercises lab
+
+Expand **Student exercises lab** in the app to try all five exercises:
+
+1. Toggle whether the analyst receives the research task as context. The calculation itself remains based on the explicit planning assumptions, so the comparison illustrates information handoff rather than changing the financial inputs.
+2. Enable or remove the Sustainability Officer and inspect the checked claims in the review notes.
+3. Select sequential or hierarchical orchestration for a normal run, or run **Compare sequential vs hierarchical** to produce both versions and compare elapsed time and reported token counts.
+4. Choose a one-time or persistent simulated calculator outage. The analyst is instructed to retry one temporary failure or disclose a persistent failure instead of guessing.
+5. Set the normal reviewer tone to skeptical or enthusiastic, or run **Compare reviewer styles** to inspect both final drafts side by side.
+
+Comparison runs use two complete local-model runs. The page reports elapsed time and token counts when CrewAI provides them, but these are not a quality score. API model charges are $0 with Ollama; electricity and hardware costs are not included. The lab requires Ollama and is intentionally unavailable in the Render Free sample-brief demo. Comparisons are qualitative demonstrations, not controlled evaluations; model output can vary between runs.
 
 ## Settings and limitations
 

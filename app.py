@@ -28,12 +28,15 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip(
 DEFAULT_MODEL = os.getenv("CREW_MODEL", "ollama/llama3.2:3b")
 DEMO_MODE = os.getenv("APP_DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
 _JOB_PROCESSES: dict[str, subprocess.Popen[Any]] = {}
+_TASK_COMPLETED = 0
+_TASK_OFFSET = 0
+_TASK_TOTAL = 1
 _PROGRESS_STEPS = (
     "Finding useful café and student information",
     "Working out the budget",
-    "Writing a clear proposal",
-    "Reviewing the details",
-    "Finishing your brief",
+"Checking sustainability notes",
+"Writing a clear proposal",
+"Reviewing the details",
 )
 
 
@@ -172,38 +175,160 @@ def get_task_output(task: Any) -> str:
 
 def publish_task_progress(_: Any) -> None:
     """Write task milestones to disk so the UI can safely poll a worker process."""
+    global _TASK_COMPLETED
     status_path = os.getenv("CAFE_JOB_STATUS_PATH")
     if not status_path:
         return
-    try:
-        current = json.loads(Path(status_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        current = {"progress": 0}
-    completed = min(int(current.get("progress", 0)) + 1, len(_PROGRESS_STEPS))
-    write_job_status(status_path, state="running", progress=completed)
+    _TASK_COMPLETED += 1
+    completed = min(_TASK_OFFSET + _TASK_COMPLETED, _TASK_TOTAL)
+    write_job_status(
+        status_path,
+        state="running",
+        completed_tasks=completed,
+        total_tasks=_TASK_TOTAL,
+    )
+
+
+def read_usage_metrics(crew: Any) -> dict[str, int]:
+    usage = getattr(crew, "usage_metrics", None)
+    if usage is None:
+        return {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
+    return {
+        "total_tokens": int(getattr(usage, "total_tokens", 0)),
+        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0)),
+        "completion_tokens": int(getattr(usage, "completion_tokens", 0)),
+    }
+
+
+def make_calculator_tool(failure_mode: str) -> Any:
+    from langchain_core.tools import tool
+
+    calls = 0
+
+    @tool
+    def calculator_tool(expression: str) -> str:
+        """Calculate basic arithmetic; optional failure modes are for the exercise lab."""
+        nonlocal calls
+        calls += 1
+        if failure_mode == "fail_once" and calls == 1:
+            return "Simulated tool failure: temporary calculator outage. Retry once."
+        if failure_mode == "always_fail":
+            return "Simulated tool failure: calculator unavailable for this run."
+        return calculator(expression)
+
+    return calculator_tool
 
 
 def run_brief_generation(
     job_id: str,
     assumptions: dict[str, Any],
     status_path: str,
+    options: dict[str, Any] | None = None,
+    experiment: str = "brief",
 ) -> None:
+    global _TASK_COMPLETED, _TASK_OFFSET, _TASK_TOTAL
+    options = options or {}
     try:
-        crew, tasks = create_crew(assumptions, task_callback=publish_task_progress)
-        result = crew.kickoff()
-        brief = get_task_output(tasks[-1]).strip() or str(result).strip()
-        if not brief:
-            raise RuntimeError("The reviewer returned an empty brief.")
-        OUTPUT_PATH.write_text(brief + "\n", encoding="utf-8")
+        variants: list[tuple[str, dict[str, Any]]] = []
+        if experiment == "compare_processes":
+            variants = [
+                ("Sequential", {**options, "process_mode": "sequential"}),
+                ("Hierarchical", {**options, "process_mode": "hierarchical"}),
+            ]
+        elif experiment == "compare_reviewers":
+            variants = [
+                ("Skeptical reviewer", {**options, "reviewer_tone": "skeptical"}),
+                ("Cheerleader reviewer", {**options, "reviewer_tone": "cheerleader"}),
+            ]
+        else:
+            variants = [("Brief", options)]
+
+        crews_and_tasks = [
+            (
+                name,
+                *create_crew(
+                    assumptions,
+                    task_callback=publish_task_progress,
+                    options=variant,
+                ),
+            )
+            for name, variant in variants
+        ]
+        _TASK_COMPLETED = 0
+        _TASK_OFFSET = 0
+        _TASK_TOTAL = sum(len(tasks) for _, _, tasks in crews_and_tasks)
         write_job_status(
             status_path,
-            state="complete",
-            progress=len(_PROGRESS_STEPS),
-            brief=brief,
-            critique=get_task_output(tasks[3]),
-            research=get_task_output(tasks[0]),
-            finance=get_task_output(tasks[1]),
+            state="running",
+            completed_tasks=0,
+            total_tasks=_TASK_TOTAL,
         )
+
+        results = []
+        for index, (name, crew, tasks) in enumerate(crews_and_tasks):
+            _TASK_OFFSET = sum(len(item[2]) for item in crews_and_tasks[:index])
+            _TASK_COMPLETED = 0
+            started = time.monotonic()
+            result = crew.kickoff()
+            duration = time.monotonic() - started
+            brief = get_task_output(tasks[-1]).strip() or str(result).strip()
+            results.append(
+                {
+                    "name": name,
+                    "brief": brief,
+                    "duration_seconds": round(duration, 2),
+                    "usage": read_usage_metrics(crew),
+                    "task_count": len(tasks),
+                }
+            )
+
+        if experiment == "brief":
+            result = results[0]
+            if not result["brief"]:
+                raise RuntimeError("The reviewer returned an empty brief.")
+            OUTPUT_PATH.write_text(result["brief"] + "\n", encoding="utf-8")
+            first_tasks = crews_and_tasks[0][2]
+            sustainability_task = next(
+                (
+                    task
+                    for task in first_tasks
+                    if getattr(getattr(task, "agent", None), "role", "")
+                    == "Sustainability Officer"
+                ),
+                None,
+            )
+            write_job_status(
+                status_path,
+                state="complete",
+                completed_tasks=_TASK_TOTAL,
+                total_tasks=_TASK_TOTAL,
+                brief=result["brief"],
+                critique=get_task_output(first_tasks[-2]),
+                research=get_task_output(first_tasks[0]),
+                finance=get_task_output(first_tasks[1]),
+                sustainability=(
+                    get_task_output(sustainability_task)
+                    if sustainability_task
+                    else ""
+                ),
+                exercise_result=None,
+            )
+        else:
+            write_job_status(
+                status_path,
+                state="complete",
+                completed_tasks=_TASK_TOTAL,
+                total_tasks=_TASK_TOTAL,
+                exercise_result={
+                    "kind": experiment,
+                    "results": results,
+                    "cost_note": (
+                        "Both runs used the local Ollama model, so model API "
+                        "charges are $0. This does not include electricity or "
+                        "hardware costs. Token counts are reported when available."
+                    ),
+                },
+            )
     except Exception as exc:
         write_job_status(
             status_path,
@@ -215,6 +340,7 @@ def run_brief_generation(
 def create_crew(
     assumptions: dict[str, Any],
     task_callback: Any = None,
+    options: dict[str, Any] | None = None,
 ) -> tuple[Any, list[Any]]:
     if DEMO_MODE:
         raise RuntimeError(
@@ -228,6 +354,11 @@ def create_crew(
     from ddgs import DDGS
     from ddgs.exceptions import DDGSException, TimeoutException
     from pydantic import BaseModel
+    options = options or {}
+    process_mode = options.get("process_mode", "sequential")
+    reviewer_tone = options.get("reviewer_tone", "skeptical")
+    include_sustainability = bool(options.get("include_sustainability", True))
+    share_research = bool(options.get("share_research", True))
 
     class ToolInput(BaseModel):
         query: str
@@ -302,7 +433,9 @@ def create_crew(
     web_search_tool = wrap_langchain_tool(web_search)
     wikipedia_tool = wrap_langchain_tool(wikipedia_search)
     reference_notes = wrap_langchain_tool(tool(verified_reference_notes))
-    calculator_tool = wrap_langchain_tool(tool(calculator))
+    calculator_tool = wrap_langchain_tool(
+        make_calculator_tool(options.get("calculator_failure", "none"))
+    )
 
     researcher = Agent(
         role="Market Researcher",
@@ -352,6 +485,10 @@ def create_crew(
         backstory=(
             "You advise senior university leaders and challenge optimistic "
             "business cases. You preserve useful evidence while flagging limits."
+            if reviewer_tone == "skeptical"
+            else "You are an enthusiastic campus ambassador. You focus on the café's "
+            "strengths and make its case sound optimistic, while still avoiding "
+            "factual inventions; this tone may under-emphasize risks."
         ),
         llm=llm,
         allow_delegation=True,
@@ -388,6 +525,18 @@ def create_crew(
         expected_output="Evidence findings with source title, URL, date, and limitations.",
         agent=researcher,
     )
+    calculator_failure = options.get("calculator_failure", "none")
+    failure_instructions = (
+        "The calculator is configured to fail once with a temporary error. Retry "
+        "the exact failed expression one time, then show whether the retry recovered."
+        if calculator_failure == "fail_once"
+        else "The calculator is configured to keep failing. Do not guess or do "
+        "mental arithmetic as a fallback; identify the unavailable calculation "
+        "and explicitly state that break-even cannot be verified."
+        if calculator_failure == "always_fail"
+        else "If the calculator returns an error, report it clearly and do not "
+        "guess or invent a calculated result."
+    )
     finance_task = Task(
         description=(
             "Estimate monthly operating break-even using only the planning "
@@ -402,7 +551,8 @@ def create_crew(
             "visits are possible. Clearly "
             "label every value as an assumption or a calculation, round only the "
             "displayed result, and state exclusions such as startup costs, taxes, "
-            "seasonality, and debt service.\n\n"
+            "seasonality, and debt service. "
+            f"{failure_instructions}\n\n"
             f"Planning assumptions:\n{assumption_text}"
         ),
         expected_output=(
@@ -410,8 +560,35 @@ def create_crew(
             "break-even arithmetic, including exclusions."
         ),
         agent=analyst,
-        context=[research_task],
+        context=[research_task] if share_research else [],
     )
+    sustainability_agent = None
+    sustainability_task = None
+    if include_sustainability:
+        sustainability_agent = Agent(
+            role="Sustainability Officer",
+            goal="Check environmental and plant-based claims for evidence and limits.",
+            backstory=(
+                "You are a campus sustainability advisor. You distinguish sourced "
+                "environmental facts from proposed actions and never claim a practice "
+                "reduces impact without supporting evidence."
+            ),
+            llm=llm,
+            verbose=False,
+            max_iter=3,
+        )
+        sustainability_task = Task(
+            description=(
+                "Check the research findings for any environmental, sustainability, "
+                "or plant-based claims. For each, classify it as (1) sourced fact, "
+                "(2) proposed pilot action, or (3) unsupported claim to remove. Do "
+                "not invent lifecycle or emissions benefits. Return only claims the "
+                "writer can safely use, their citations, and the major evidence gaps."
+            ),
+            expected_output="A short verified-claims list, citations, and limitations.",
+            agent=sustainability_agent,
+            context=[research_task],
+        )
     draft_task = Task(
         description=(
             "Draft a decision-ready, one-page Markdown launch brief for the Dean. "
@@ -424,7 +601,11 @@ def create_crew(
         ),
         expected_output="A concise one-page Markdown draft with sources and arithmetic.",
         agent=writer,
-        context=[research_task, finance_task],
+        context=[
+            research_task,
+            finance_task,
+            *([sustainability_task] if sustainability_task else []),
+        ],
     )
     critique_task = Task(
         description=(
@@ -437,7 +618,12 @@ def create_crew(
         ),
         expected_output="Three evidence-based weaknesses with concrete corrections.",
         agent=reviewer,
-        context=[draft_task, research_task, finance_task],
+        context=[
+            draft_task,
+            research_task,
+            finance_task,
+            *([sustainability_task] if sustainability_task else []),
+        ],
     )
     final_task = Task(
         description=(
@@ -453,16 +639,34 @@ def create_crew(
         ),
         expected_output="The final, reviewed, one-page Markdown brief only.",
         agent=reviewer,
-        context=[draft_task, critique_task, research_task, finance_task],
+        context=[
+            draft_task,
+            critique_task,
+            research_task,
+            finance_task,
+            *([sustainability_task] if sustainability_task else []),
+        ],
     )
-    crew = Crew(
-        agents=[researcher, analyst, writer, reviewer],
-        tasks=[research_task, finance_task, draft_task, critique_task, final_task],
-        process=Process.sequential,
-        verbose=False,
-        task_callback=task_callback,
-    )
-    return crew, [research_task, finance_task, draft_task, critique_task, final_task]
+    agents = [researcher, analyst, writer, reviewer]
+    if sustainability_agent:
+        agents.append(sustainability_agent)
+    tasks = [research_task, finance_task]
+    if sustainability_task:
+        tasks.append(sustainability_task)
+    tasks.extend([draft_task, critique_task, final_task])
+    crew_config = {
+        "agents": agents,
+        "tasks": tasks,
+        "process": (
+            Process.hierarchical if process_mode == "hierarchical" else Process.sequential
+        ),
+        "verbose": False,
+        "task_callback": task_callback,
+    }
+    if process_mode == "hierarchical":
+        crew_config["manager_llm"] = llm
+    crew = Crew(**crew_config)
+    return crew, tasks
 
 
 def render_assumptions() -> dict[str, Any]:
@@ -661,6 +865,7 @@ def main() -> None:
         st.markdown(
             "- **Market Researcher** searches for student, pricing, and trend evidence.\n"
             "- **Financial Analyst** uses a calculator tool to show every break-even step.\n"
+            "- **Sustainability Officer** checks environmental claims when enabled.\n"
             "- **Marketing Writer** turns both handoffs into a one-page brief.\n"
             "- **Skeptical Reviewer** identifies weaknesses, then produces the final version.\n\n"
             "The research and financial outputs are passed explicitly to the next tasks. "
@@ -675,6 +880,62 @@ def main() -> None:
         False,
         "No-cost Render demo: AI generation is disabled; the reviewed sample brief is shown below.",
     )
+    generation_running = st.session_state.get("generation_state") == "running"
+    with st.expander("Student exercises lab", expanded=False):
+        st.write(
+            "Explore the five classroom exercises. Comparison runs create separate "
+            "drafts so you can judge the differences side by side."
+        )
+        share_research = st.checkbox(
+            "1. Give the Financial Analyst the research handoff",
+            value=True,
+            help=(
+                "Turn this off to compare the workflow when the analyst receives "
+                "only the planning assumptions."
+            ),
+        )
+        include_sustainability = st.checkbox(
+            "2. Add the Sustainability Officer",
+            value=True,
+            help="The officer checks environmental and plant-based claims before drafting.",
+        )
+        process_label = st.selectbox(
+            "3. Process used for a normal brief",
+            ("Sequential (agents take turns)", "Hierarchical (manager coordinates)"),
+            index=0,
+        )
+        calculator_failure_label = st.selectbox(
+            "4. Calculator behavior",
+            (
+                "Works normally",
+                "Fails once, then can recover",
+                "Keeps failing",
+            ),
+            index=0,
+            help=(
+                "A controlled simulation: the analyst is instructed to retry a "
+                "temporary failure or disclose a persistent failure."
+            ),
+        )
+        reviewer_label = st.selectbox(
+            "5. Reviewer style used for a normal brief",
+            ("Skeptical reviewer", "Enthusiastic cheerleader"),
+            index=0,
+        )
+        compare_columns = st.columns(2)
+        with compare_columns[0]:
+            compare_processes_clicked = st.button(
+                "Compare sequential vs hierarchical",
+                disabled=DEMO_MODE or not model_ready or generation_running,
+                use_container_width=True,
+            )
+        with compare_columns[1]:
+            compare_reviewers_clicked = st.button(
+                "Compare reviewer styles",
+                disabled=DEMO_MODE or not model_ready or generation_running,
+                use_container_width=True,
+            )
+
     if DEMO_MODE:
         st.info(model_status)
         sample_path = ROOT / "final_brief.md"
@@ -696,22 +957,57 @@ def main() -> None:
         f"Open {assumptions['open_days']} days/month"
     )
 
-    generation_running = st.session_state.get("generation_state") == "running"
-    if st.button(
+    clicked_normal = st.button(
         "AI generation is disabled in this free demo"
         if DEMO_MODE
         else "Create my café launch brief",
         type="primary",
         disabled=DEMO_MODE or not model_ready or generation_running,
         use_container_width=True,
-    ):
+    )
+    experiment = (
+        "compare_processes"
+        if compare_processes_clicked
+        else "compare_reviewers"
+        if compare_reviewers_clicked
+        else "brief"
+    )
+    should_start = (
+        clicked_normal or compare_processes_clicked or compare_reviewers_clicked
+    )
+    if should_start:
         try:
             job_id = uuid.uuid4().hex
             job_directory = Path(tempfile.gettempdir()) / "campus-cafe-launch-team"
             job_directory.mkdir(parents=True, exist_ok=True)
             status_path = job_directory / f"{job_id}.json"
             log_path = job_directory / f"{job_id}.log"
-            write_job_status(status_path, state="running", progress=0)
+            options = {
+                "share_research": share_research,
+                "include_sustainability": include_sustainability,
+                "process_mode": (
+                    "hierarchical"
+                    if process_label.startswith("Hierarchical")
+                    else "sequential"
+                ),
+                "reviewer_tone": (
+                    "cheerleader"
+                    if reviewer_label.startswith("Enthusiastic")
+                    else "skeptical"
+                ),
+                "calculator_failure": {
+                    "Works normally": "none",
+                    "Fails once, then can recover": "fail_once",
+                    "Keeps failing": "always_fail",
+                }[calculator_failure_label],
+            }
+            write_job_status(
+                status_path,
+                state="running",
+                completed_tasks=0,
+                total_tasks=1,
+                experiment=experiment,
+            )
             worker_environment = os.environ.copy()
             worker_environment["CAFE_JOB_STATUS_PATH"] = str(status_path)
             with log_path.open("w", encoding="utf-8") as worker_log:
@@ -722,6 +1018,8 @@ def main() -> None:
                         job_id,
                         json.dumps(assumptions),
                         str(status_path),
+                        json.dumps(options),
+                        experiment,
                     ],
                     cwd=ROOT,
                     env=worker_environment,
@@ -737,6 +1035,8 @@ def main() -> None:
             st.session_state["generation_state"] = "running"
             st.session_state["generation_progress"] = 0
             st.session_state["generation_started"] = time.time()
+            st.session_state["generation_experiment"] = experiment
+            st.session_state["generation_exercise_result"] = None
         except Exception as exc:
             st.error(
                 "We couldn’t start the brief. Please refresh the page and try again."
@@ -747,7 +1047,10 @@ def main() -> None:
     if st.session_state.get("generation_state") == "running":
         render_generation_status()
     elif st.session_state.get("generation_state") == "complete":
-        st.success("Your reviewed café launch brief is ready below.")
+        if st.session_state.get("generation_exercise_result"):
+            st.success("Your exercise comparison is ready below.")
+        else:
+            st.success("Your reviewed café launch brief is ready below.")
     elif st.session_state.get("generation_state") == "error":
         st.error(
             "We couldn’t finish your brief. Please try again; if it keeps "
@@ -773,6 +1076,34 @@ def main() -> None:
             st.write(st.session_state.get("research", "No research output available."))
             st.markdown("**Financial analysis**")
             st.write(st.session_state.get("finance", "No financial output available."))
+            if st.session_state.get("sustainability"):
+                st.markdown("**Sustainability check**")
+                st.write(st.session_state["sustainability"])
+
+    exercise_result = st.session_state.get("generation_exercise_result")
+    if exercise_result:
+        st.divider()
+        st.subheader("Exercise comparison")
+        st.caption(exercise_result.get("cost_note", ""))
+        results = exercise_result.get("results", [])
+        for start in range(0, len(results), 2):
+            comparison_columns = st.columns(min(2, len(results) - start))
+            for column, result in zip(comparison_columns, results[start : start + 2]):
+                with column:
+                    st.markdown(f"#### {result['name']}")
+                    token_count = result["usage"].get("total_tokens", 0)
+                    token_label = f"{token_count:,}" if token_count else "not reported"
+                    st.caption(
+                        f"Run time: {result['duration_seconds']} seconds · "
+                        f"Tasks: {result['task_count']} · "
+                        f"Tokens: {token_label}"
+                    )
+                    st.markdown(result["brief"])
+        st.info(
+            "Compare the evidence, risk discussion, assumptions, and final "
+            "recommendations yourself; run time and token counts describe effort, "
+            "not quality."
+        )
 
     st.divider()
     st.caption(
@@ -802,10 +1133,16 @@ def render_generation_status() -> None:
         return
     state = job_status.get("state")
     if state == "complete":
-        st.session_state["brief"] = job_status["brief"]
-        st.session_state["critique"] = job_status.get("critique", "")
-        st.session_state["research"] = job_status.get("research", "")
-        st.session_state["finance"] = job_status.get("finance", "")
+        if job_status.get("brief"):
+            st.session_state["brief"] = job_status["brief"]
+            st.session_state["critique"] = job_status.get("critique", "")
+            st.session_state["research"] = job_status.get("research", "")
+            st.session_state["finance"] = job_status.get("finance", "")
+            st.session_state["sustainability"] = job_status.get("sustainability", "")
+        if job_status.get("exercise_result"):
+            st.session_state["generation_exercise_result"] = job_status[
+                "exercise_result"
+            ]
         st.session_state["generation_state"] = "complete"
         _JOB_PROCESSES.pop(job_id, None)
         st.rerun(scope="app")
@@ -818,7 +1155,13 @@ def render_generation_status() -> None:
         _JOB_PROCESSES.pop(job_id, None)
         st.rerun(scope="app")
         return
-    progress = int(job_status.get("progress", 0))
+    completed = int(job_status.get("completed_tasks", 0))
+    total = max(1, int(job_status.get("total_tasks", 1)))
+    progress = min(1.0, completed / total)
+    stage_index = min(
+        len(_PROGRESS_STEPS) - 1,
+        int(progress * len(_PROGRESS_STEPS)),
+    )
     started = float(st.session_state.get("generation_started", time.time()))
     elapsed_seconds = max(0, int(time.time() - started))
     elapsed_minutes = elapsed_seconds // 60
@@ -828,19 +1171,22 @@ def render_generation_status() -> None:
         if elapsed_minutes
         else "Just getting started"
     )
-    if progress < len(_PROGRESS_STEPS):
-        current_step = _PROGRESS_STEPS[progress]
-        step_label = (
-            "Getting started"
-            if progress == 0
-            else f"{progress} of {len(_PROGRESS_STEPS)} steps complete"
-        )
-        st.progress(progress / len(_PROGRESS_STEPS), text=step_label)
-        st.info(
-            f"**{current_step}.** Your café brief is being prepared. "
-            f"{elapsed}. Local models can take a few minutes; "
-            "you can keep this page open."
-        )
+    current_step = (
+        "Getting started" if completed == 0 else _PROGRESS_STEPS[stage_index]
+    )
+    st.progress(
+        progress,
+        text=(
+            f"{completed} of {int(job_status.get('total_tasks', 1))} team steps complete"
+            if completed
+            else "Getting started"
+        ),
+    )
+    st.info(
+        f"**{current_step}.** Your café brief is being prepared. "
+        f"{elapsed}. Local models can take a few minutes; "
+        "you can keep this page open."
+    )
 
 
 if __name__ == "__main__":
