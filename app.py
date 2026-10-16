@@ -12,18 +12,13 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 import streamlit as st
-from crewai import Agent, Crew, LLM, Process, Task
-from crewai.tools import BaseTool
-from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
-from langchain_community.utilities import WikipediaAPIWrapper
-from langchain_core.tools import tool
-from pydantic import BaseModel
 
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_PATH = Path(os.getenv("OUTPUT_PATH", str(ROOT / "final_brief.md")))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL = os.getenv("CREW_MODEL", "ollama/llama3.2:3b")
+DEMO_MODE = os.getenv("APP_DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
 
 
 def check_local_model() -> tuple[bool, str]:
@@ -50,7 +45,6 @@ def check_local_model() -> tuple[bool, str]:
         )
 
 
-@tool
 def calculator(expression: str) -> str:
     """Calculate basic arithmetic using numbers and +, -, *, /, and parentheses."""
     operators: dict[type[ast.operator], Any] = {
@@ -83,31 +77,9 @@ def calculator(expression: str) -> str:
         return f"Error: {exc}"
 
 
-class ToolInput(BaseModel):
-    query: str
 
 
-class LangChainToolAdapter(BaseTool):
-    """Adapt a LangChain tool to CrewAI's tool interface."""
 
-    name: str
-    description: str
-    args_schema: Type[BaseModel] = ToolInput
-    lc_tool: Any
-
-    def _run(self, query: str) -> str:
-        return str(self.lc_tool.invoke(query))
-
-
-def wrap_langchain_tool(lc_tool: Any) -> LangChainToolAdapter:
-    return LangChainToolAdapter(
-        name=lc_tool.name,
-        description=lc_tool.description,
-        lc_tool=lc_tool,
-    )
-
-
-@tool
 def verified_reference_notes(topic: str) -> str:
     """Return built-in, cited campus café market facts when web search is unavailable."""
     return (
@@ -136,13 +108,47 @@ def verified_reference_notes(topic: str) -> str:
     )
 
 
-def get_task_output(task: Task) -> str:
+def get_task_output(task: Any) -> str:
     output = getattr(task, "output", None)
     raw = getattr(output, "raw", None)
     return str(raw if raw is not None else output or "")
 
 
-def create_crew(assumptions: dict[str, Any]) -> tuple[Crew, list[Task]]:
+def create_crew(assumptions: dict[str, Any]) -> tuple[Any, list[Any]]:
+    if DEMO_MODE:
+        raise RuntimeError(
+            "AI generation is disabled in the no-cost Render demo. "
+            "Run locally with Ollama to use the multi-agent workflow."
+        )
+
+    from crewai import Agent, Crew, LLM, Process, Task
+    from crewai.tools import BaseTool
+    from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
+    from langchain_community.utilities import WikipediaAPIWrapper
+    from langchain_core.tools import tool
+    from pydantic import BaseModel
+
+    class ToolInput(BaseModel):
+        query: str
+
+    class LangChainToolAdapter(BaseTool):
+        """Adapt a LangChain tool to CrewAI's tool interface."""
+
+        name: str
+        description: str
+        args_schema: Type[BaseModel] = ToolInput
+        lc_tool: Any
+
+        def _run(self, query: str) -> str:
+            return str(self.lc_tool.invoke(query))
+
+    def wrap_langchain_tool(lc_tool: Any) -> LangChainToolAdapter:
+        return LangChainToolAdapter(
+            name=lc_tool.name,
+            description=lc_tool.description,
+            lc_tool=lc_tool,
+        )
+
     llm = LLM(
         model=DEFAULT_MODEL,
         base_url=OLLAMA_BASE_URL,
@@ -152,8 +158,8 @@ def create_crew(assumptions: dict[str, Any]) -> tuple[Crew, list[Task]]:
     wikipedia = wrap_langchain_tool(
         WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper(top_k_results=2))
     )
-    reference_notes = wrap_langchain_tool(verified_reference_notes)
-    calculator_tool = wrap_langchain_tool(calculator)
+    reference_notes = wrap_langchain_tool(tool(verified_reference_notes))
+    calculator_tool = wrap_langchain_tool(tool(calculator))
 
     researcher = Agent(
         role="Market Researcher",
@@ -425,8 +431,16 @@ def main() -> None:
             "is instructed to disclose that it was used."
         )
 
-    model_ready, model_status = check_local_model()
-    if model_ready:
+    model_ready, model_status = check_local_model() if not DEMO_MODE else (
+        False,
+        "No-cost Render demo: AI generation is disabled; the reviewed sample brief is shown below.",
+    )
+    if DEMO_MODE:
+        st.info(model_status)
+        sample_path = ROOT / "final_brief.md"
+        if "brief" not in st.session_state and sample_path.is_file():
+            st.session_state["brief"] = sample_path.read_text(encoding="utf-8")
+    elif model_ready:
         st.success(model_status)
     else:
         st.warning(model_status)
@@ -443,9 +457,11 @@ def main() -> None:
     )
 
     if st.button(
-        "Generate and review launch brief",
+        "AI generation is disabled in this free demo"
+        if DEMO_MODE
+        else "Generate and review launch brief",
         type="primary",
-        disabled=not model_ready,
+        disabled=DEMO_MODE or not model_ready,
         use_container_width=True,
     ):
         try:

@@ -1,13 +1,12 @@
 services:
   - type: web
     name: campus-cafe-launch-team
-    runtime: docker
-    plan: pro
+    runtime: python
+    plan: free
     region: oregon
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    buildCommand: pip install -r requirements-demo.txt
+    startCommand: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT
     healthCheckPath: /_stcore/health
-    disk:
-      name: ollama-models
-      mountPath: /var/data
-      sizeGB: 10
+    envVars:
+      - key: APP_DEMO_MODE
+        value: "true"

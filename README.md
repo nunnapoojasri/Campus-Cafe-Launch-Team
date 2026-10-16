@@ -33,19 +33,18 @@ streamlit run app.py
 
 Open the local URL printed by Streamlit, normally `http://localhost:8501`. No API key environment variable is read or required.
 
-## Deploy to Render
+## Deploy the no-cost demo to Render
 
-The repository includes a Render Blueprint (`render.yaml`) and Docker image setup. The deployment runs Ollama and Streamlit in one web service, and saves the model and generated brief on a persistent disk. Creating the service requires a Render account and a paid `pro` compute plan (4 GB RAM) because the local 3B model does not fit Render's free service resources; the 10 GB persistent disk is billed separately. Check current [Render pricing](https://render.com/pricing) before creating the service.
+`render.yaml` configures a free native Python web service. It displays the included reviewed sample brief, but **AI generation is intentionally disabled**: Render's free instance cannot run the local 3B Ollama model. No model API key or paid resource is needed for this demo. The deployment uses `requirements-demo.txt` so the free instance does not load the much larger CrewAI stack.
 
 After pushing this repository to GitHub:
 
 1. Open the [Render Blueprint dashboard](https://dashboard.render.com/blueprints).
-2. Select **New Blueprint Instance** and connect this repository.
-3. Review the `campus-cafe-launch-team` service, region, paid compute plan, and persistent disk charges.
-4. Create the Blueprint. Render builds the Dockerfile and pulls `llama3.2:3b` onto the persistent disk on first startup. The initial deploy can take several minutes.
-5. Open the service's `onrender.com` URL after its health check passes.
+2. Select **New Blueprint Instance** and connect `nunnapoojasri/Campus-Cafe-Launch-Team`.
+3. Review that the service uses the **Free** plan, then create the Blueprint.
+4. Open the service's `onrender.com` URL after its health check passes.
 
-No model API key is configured in the Blueprint or required by the app. The service needs outbound network access for web research, but has a cited fallback if public search is unavailable.
+To use all four AI agents without an API key, run the app locally with Ollama as described above. The optional Dockerfile and `deploy/render-start.sh` describe a model-hosting setup for a paid server with enough memory and a persistent disk; the free Render Blueprint does not use them.
 
 ## The agent team
 
