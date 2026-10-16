@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" role="img" aria-labelledby="title desc">
+  <title id="title">Campus cafe welcome</title>
+  <desc id="desc">A warm illustrated campus coffee cup, tulips, pastry and rainbow window.</desc>
+  <defs>
+    <linearGradient id="window" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F7B2CE"/>
+      <stop offset=".32" stop-color="#F7D09C"/>
+      <stop offset=".58" stop-color="#DDEAA9"/>
+      <stop offset=".8" stop-color="#A8D9D2"/>
+      <stop offset="1" stop-color="#C9B9E8"/>
+    </linearGradient>
+    <linearGradient id="cup" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#FFFDF8"/>
+      <stop offset="1" stop-color="#F0DDEA"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="26" width="656" height="348" rx="40" fill="#FBF2F7"/>
+  <rect x="411" y="58" width="225" height="190" rx="22" fill="url(#window)"/>
+  <path d="M486 58v190M560 58v190M411 153h225" fill="none" stroke="#FFF9FC" stroke-width="12" opacity=".8"/>
+  <path d="M66 292h588v39a19 19 0 0 1-19 19H85a19 19 0 0 1-19-19z" fill="#8D5B63"/>
+  <path d="M95 350h14v20H95zm500 0h14v20h-14z" fill="#684350"/>
+  <ellipse cx="282" cy="306" rx="153" ry="22" fill="#DECADB"/>
+  <path d="M193 192h167l-13 108a24 24 0 0 1-24 21h-92a24 24 0 0 1-24-21z" fill="url(#cup)" stroke="#74495E" stroke-width="7"/>
+  <path d="M360 214h35a39 39 0 0 1 0 78h-45" fill="none" stroke="#74495E" stroke-width="12"/>
+  <ellipse cx="277" cy="193" rx="84" ry="18" fill="#765142"/>
+  <path d="M256 184c-27-18 8-31-8-48m42 48c-25-20 12-32-3-52" fill="none" stroke="#FFF8FC" stroke-width="7" stroke-linecap="round" opacity=".85"/>
+  <path d="M216 247c35 28 69 28 104 0" fill="none" stroke="#CC6F9F" stroke-width="9" stroke-linecap="round"/>
+  <path d="M266 243l-8 19h21l-8-19" fill="#CC6F9F"/>
+  <path d="M479 294c12-40 6-82-6-113m4 79c-24-20-37-15-46-31m50 4c21-20 33-17 44-31m-50 19c-20-19-34-17-46-34" fill="none" stroke="#527E5D" stroke-width="8" stroke-linecap="round"/>
+  <path d="M457 199c-22 1-35-14-28-34 20-2 36 8 35 26m24-7c-4-22 9-36 29-34 4 20-5 37-24 40m-45 16c-21 0-34-15-27-34 20-1 35 9 34 27" fill="#D96193"/>
+  <path d="M456 198c2-17-8-29-26-33m53-1c-11 14-13 25-11 42m-30 23c2-18-8-29-25-34" fill="none" stroke="#F4ABC7" stroke-width="5" stroke-linecap="round"/>
+  <path d="M540 291c-10-30 11-51 40-43 11 30-5 52-40 43m-5 1c-29 1-46-19-34-46 31-5 51 11 47 42" fill="#70A77A"/>
+  <path d="M538 286l34-32m-31 33-29-31" stroke="#D9EAC3" stroke-width="4" stroke-linecap="round"/>
+  <path d="M113 289c-20-27-10-52 19-59 24 19 23 42-7 65m8-3c-1-30 20-46 47-33 4 31-15 48-47 46" fill="#78A875"/>
+  <path d="M128 289l5-46m2 47 39-35" stroke="#D9EAC3" stroke-width="4" stroke-linecap="round"/>
+  <path d="M382 287c9-26 35-35 59-22-1 26-21 39-59 22" fill="#E6A34C"/>
+  <path d="M387 281c15-12 32-17 48-17" fill="none" stroke="#FFF2D3" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="112" cy="92" r="8" fill="#E0A751"/>
+  <circle cx="369" cy="113" r="7" fill="#77A889"/>
+  <path d="M104 143c12-14 25-14 37 0m196-51c12-14 25-14 37 0" fill="none" stroke="#9A78B2" stroke-width="5" stroke-linecap="round"/>
+</svg>

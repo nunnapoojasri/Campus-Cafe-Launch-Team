@@ -35,6 +35,8 @@ Open the local URL printed by Streamlit, normally `http://localhost:8501`. No AP
 
 Creating a brief on a CPU-only computer can take a few minutes. The page stays responsive while a separate worker prepares the brief, showing plain-language progress updates. Detailed agent and tool logs stay hidden unless an error needs troubleshooting.
 
+The interface uses a light tulip-inspired palette and bundled café illustrations. The images load locally, so the page does not wait on an external image service. Model availability checks are cached briefly, and progress updates poll every two seconds.
+
 ## Deploy the no-cost demo to Render
 
 `render.yaml` configures a free native Python web service. It displays the included reviewed sample brief, but **AI generation is intentionally disabled**: Render's free instance cannot run the local 3B Ollama model. No model API key or paid resource is needed for this demo. The deployment uses `requirements-demo.txt` so the free instance does not load the much larger CrewAI stack.

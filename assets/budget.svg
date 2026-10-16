@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 140" role="img" aria-labelledby="title">
+  <title id="title">Cafe budget and calculation illustration</title>
+  <rect x="48" y="12" width="104" height="120" rx="17" fill="#E7E2F6" stroke="#71649D" stroke-width="5"/>
+  <rect x="64" y="27" width="72" height="25" rx="7" fill="#FFFDFE"/>
+  <path d="M77 40h45" stroke="#78A47B" stroke-width="5" stroke-linecap="round"/>
+  <g fill="#C982AD">
+    <rect x="65" y="65" width="22" height="19" rx="5"/><rect x="95" y="65" width="22" height="19" rx="5"/><rect x="125" y="65" width="15" height="19" rx="5"/>
+    <rect x="65" y="92" width="22" height="19" rx="5"/><rect x="95" y="92" width="22" height="19" rx="5"/><rect x="125" y="92" width="15" height="19" rx="5"/>
+  </g>
+  <path d="M177 96c0-18 14-32 31-32s30 14 30 32v31h-61z" fill="#F2B66D" stroke="#A76B56" stroke-width="5"/>
+  <path d="M180 100h55M192 78l-7 20m26-19-6 21" stroke="#FFF0D4" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="27" cy="31" r="8" fill="#E56E99"/>
+</svg>

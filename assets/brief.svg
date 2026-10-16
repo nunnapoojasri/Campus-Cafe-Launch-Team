@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 140" role="img" aria-labelledby="title">
+  <title id="title">Finished cafe launch brief illustration</title>
+  <rect x="52" y="14" width="112" height="117" rx="12" fill="#FFFDF8" stroke="#A1789C" stroke-width="5"/>
+  <path d="M72 38h71M72 55h51M72 74h69M72 91h45" stroke="#B881A7" stroke-width="6" stroke-linecap="round"/>
+  <path d="m77 111 10 9 19-22" fill="none" stroke="#65A57A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M181 116c5-20 3-37-3-53m2 34c-15-13-26-9-30-21m31 5c13-13 23-11 30-21" fill="none" stroke="#658C67" stroke-width="5" stroke-linecap="round"/>
+  <path d="M174 64c-16 0-24-11-19-25 14-1 25 7 24 19m20-9c-3-16 6-26 20-24 3 14-3 26-17 29" fill="#DB719E"/>
+  <path d="m203 135 9-17 9 17z" fill="#E7A757"/>
+</svg>

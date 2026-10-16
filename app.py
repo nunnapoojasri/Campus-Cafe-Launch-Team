@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import atexit
+import base64
 import json
 import operator
 import os
@@ -64,17 +65,21 @@ def write_job_status(path: str | Path, **updates: Any) -> None:
     temporary_path.replace(status_path)
 
 
-def check_local_model() -> tuple[bool, str]:
-    model_name = DEFAULT_MODEL.removeprefix("ollama/").lower()
+@st.cache_data(ttl=20, show_spinner=False)
+def check_local_model(
+    base_url: str = OLLAMA_BASE_URL,
+    configured_model: str = DEFAULT_MODEL,
+) -> tuple[bool, str]:
+    model_name = configured_model.removeprefix("ollama/").lower()
     try:
-        with urlopen(f"{OLLAMA_BASE_URL}/api/tags", timeout=2) as response:
+        with urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=2) as response:
             payload = json.loads(response.read())
         installed = [model.get("name", "").lower() for model in payload.get("models", [])]
         if any(
             name == model_name or name.split(":")[0] == model_name.split(":")[0]
             for name in installed
         ):
-            return True, f"Local model ready: `{DEFAULT_MODEL}`"
+            return True, f"Local model ready: `{configured_model}`"
         return (
             False,
             f"Ollama is running, but `{DEFAULT_MODEL}` is not installed. "
@@ -86,6 +91,14 @@ def check_local_model() -> tuple[bool, str]:
             "Local Ollama is not running. Install Ollama, start it, and pull the "
             f"model with `ollama pull {model_name}`. ({exc})",
         )
+
+
+@st.cache_data(show_spinner=False)
+def read_illustration(filename: str) -> str:
+    """Read a bundled illustration; no external image service is used."""
+    asset_path = ROOT / "assets" / filename
+    encoded = base64.b64encode(asset_path.read_bytes()).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
 
 
 def calculator(expression: str) -> str:
@@ -304,7 +317,7 @@ def create_crew(
         tools=[web_search_tool, wikipedia_tool, reference_notes],
         llm=llm,
         verbose=False,
-        max_iter=4,
+        max_iter=3,
     )
     analyst = Agent(
         role="Financial Analyst",
@@ -512,22 +525,22 @@ def main() -> None:
         .block-container {max-width: 1120px; padding-top: 2rem; padding-bottom: 3rem;}
         [data-testid="stAppViewContainer"] {
             background:
-                radial-gradient(ellipse at 8% 3%, rgba(221, 73, 137, .16), transparent 27%),
-                radial-gradient(ellipse at 90% 8%, rgba(96, 82, 195, .16), transparent 29%),
-                radial-gradient(ellipse at 65% 95%, rgba(40, 157, 146, .11), transparent 30%),
-                #180f1b;
+                radial-gradient(ellipse at 8% 3%, rgba(235, 133, 176, .17), transparent 27%),
+                radial-gradient(ellipse at 90% 8%, rgba(146, 128, 222, .16), transparent 29%),
+                radial-gradient(ellipse at 65% 95%, rgba(93, 183, 162, .12), transparent 30%),
+                #fff9fc;
         }
-        [data-testid="stHeader"] {background: rgba(24, 15, 27, .9);}
+        [data-testid="stHeader"] {background: rgba(255, 249, 252, .94);}
         [data-testid="stSidebar"] {
             background:
-                linear-gradient(160deg, rgba(179, 59, 117, .17), transparent 42%),
-                linear-gradient(330deg, rgba(82, 81, 167, .16), transparent 45%),
-                #211524;
-            border-right: 1px solid #56344f;
+                linear-gradient(160deg, rgba(225, 137, 177, .2), transparent 42%),
+                linear-gradient(330deg, rgba(139, 137, 210, .16), transparent 45%),
+                #f7eff5;
+            border-right: 1px solid #ead8e8;
         }
-        [data-testid="stSidebar"] h2, [data-testid="stSidebar"] label {color: #F5DDEC;}
-        [data-testid="stMarkdownContainer"], [data-testid="stCaptionContainer"] {color: #E9DCEB;}
-        h1, h2, h3 {color: #FFF2FA;}
+        [data-testid="stSidebar"] h2, [data-testid="stSidebar"] label {color: #53334c;}
+        [data-testid="stMarkdownContainer"], [data-testid="stCaptionContainer"] {color: #493b4e;}
+        h1, h2, h3 {color: #39243e;}
         h1 {letter-spacing: -.035em;}
         h1::after {
             content: "";
@@ -537,67 +550,111 @@ def main() -> None:
             margin-top: 10px;
             border-radius: 999px;
             background: linear-gradient(90deg, #F06C9B, #F4A261, #E9C46A, #66B58B, #58A6C8, #9B7ED8);
-            box-shadow: 0 0 18px rgba(221, 73, 137, .27);
+            box-shadow: 0 0 16px rgba(190, 87, 151, .2);
         }
         [data-testid="stNumberInput"] input {
-            background: #2D2032;
-            color: #FFF5FC;
-            border-color: #69435F;
+            background: #fffdfd;
+            color: #35283A;
+            border-color: #d8bfd5;
         }
         [data-testid="stMetric"] {
-            background: linear-gradient(145deg, rgba(55, 35, 60, .96), rgba(37, 29, 52, .96));
-            border: 1px solid #684564;
+            background: linear-gradient(145deg, rgba(255, 253, 255, .98), rgba(247, 239, 250, .98));
+            border: 1px solid #e5d2e7;
             border-radius: 14px;
             padding: 14px 18px;
         }
         [data-testid="stExpander"] {
-            background: rgba(43, 29, 48, .9);
-            border: 1px solid #5B3A57;
+            background: rgba(255, 253, 255, .88);
+            border: 1px solid #e5d2e7;
             border-radius: 12px;
         }
         .stButton > button, .stDownloadButton > button {
             border-radius: 10px;
             font-weight: 650;
             min-height: 2.8rem;
-            border: 1px solid rgba(247, 224, 242, .28);
-            background: linear-gradient(105deg, #A93870, #82448C 36%, #515FA7 68%, #287F83);
-            color: #FFF8FD;
-            box-shadow: 0 7px 22px rgba(125, 53, 119, .22);
+            border: 1px solid rgba(106, 48, 104, .25);
+            background: linear-gradient(105deg, #B63870, #84458C 36%, #535FA2 68%, #267A78);
+            color: #FFFFFF;
+            box-shadow: 0 7px 18px rgba(125, 53, 119, .16);
         }
         .stButton > button:hover, .stDownloadButton > button:hover {
-            border-color: #F3B8DA;
+            border-color: #C96A9E;
             color: #FFFFFF;
             filter: brightness(1.12);
         }
         [data-testid="stProgress"] > div > div {
             background: linear-gradient(90deg, #F06C9B, #F4A261, #E9C46A, #66B58B, #58A6C8, #9B7ED8);
         }
+        .cafe-step-card {
+            min-height: 220px;
+            padding: 14px 16px;
+            border: 1px solid #E7D8E8;
+            border-radius: 16px;
+            background: linear-gradient(150deg, #FFFFFF, #FBF4FA);
+            box-shadow: 0 8px 22px rgba(99, 56, 92, .07);
+        }
+        .cafe-step-card img {height: 104px; width: 100%; object-fit: contain;}
+        .cafe-step-card h4 {margin: 8px 0 4px; color: #53334C;}
+        .cafe-step-card p {margin: 0; color: #625367; font-size: .92rem;}
         [data-testid="stAlert"] {
             border-radius: 12px;
-            background-color: #2A1D30;
-            border-color: #64445F;
+            background-color: #F7EFF7;
+            border-color: #DFCADE;
         }
-        [data-testid="stAlert"] p, [data-testid="stAlert"] span {color: #F7EDF6;}
-        [data-testid="stSpinner"] p {color: #F7EDF6;}
-        hr {border-color: #4B344C;}
+        [data-testid="stAlert"] p, [data-testid="stAlert"] span {color: #49354B;}
+        [data-testid="stSpinner"] p {color: #49354B;}
+        hr {border-color: #E5D5E5;}
         </style>
         """,
         unsafe_allow_html=True,
     )
     assumptions = render_assumptions()
-    st.title("☕ Campus Café")
-    st.markdown(
-        "### Launch Team"
-    )
-    st.write(
-        "A warm, clear workspace for building an evidence-aware launch proposal. "
-        "Four AI specialists research, calculate, write, and challenge the brief "
-        "before it is saved."
-    )
+    hero_text, hero_picture = st.columns([1.55, 1], vertical_alignment="center")
+    with hero_text:
+        st.title("☕ Campus Café")
+        st.markdown("### Launch Team")
+        st.write(
+            "Turn your café idea into a clear, evidence-aware launch brief. "
+            "Set a few planning numbers, then let the team do the research, "
+            "budgeting, writing, and review."
+        )
+    with hero_picture:
+        st.markdown(
+            f'<img src="{read_illustration("cafe-hero.svg")}" '
+            'alt="Illustration of a welcoming campus café with coffee, tulips, '
+            'and a pastry" style="width:100%;max-height:230px;object-fit:contain;">',
+            unsafe_allow_html=True,
+        )
+
+    step_columns = st.columns(3)
+    steps = [
+        (
+            "research.svg",
+            "1. Find useful evidence",
+            "Look for student needs, café choices, and current food trends.",
+        ),
+        (
+            "budget.svg",
+            "2. Check the numbers",
+            "Show what it could take to cover the café’s monthly costs.",
+        ),
+        (
+            "brief.svg",
+            "3. Review the brief",
+            "Turn the findings into a concise proposal and check its weak spots.",
+        ),
+    ]
+    for column, (image_name, title, description) in zip(step_columns, steps):
+        with column:
+            st.markdown(
+                f'<div class="cafe-step-card">'
+                f'<img src="{read_illustration(image_name)}" alt="">'
+                f"<h4>{title}</h4><p>{description}</p></div>",
+                unsafe_allow_html=True,
+            )
     st.caption(
-        "When you generate a brief, your local computer may take a few minutes "
-        "to complete the research and review. Keep this page open; we’ll show "
-        "simple progress updates as the brief comes together."
+        "Tip: the numbers in the sidebar are editable planning assumptions, "
+        "not supplier quotes or proof of student demand."
     )
 
     with st.expander("How the agent team works", expanded=False):
@@ -612,7 +669,9 @@ def main() -> None:
             "is instructed to disclose that it was used."
         )
 
-    model_ready, model_status = check_local_model() if not DEMO_MODE else (
+    model_ready, model_status = check_local_model(
+        OLLAMA_BASE_URL, DEFAULT_MODEL
+    ) if not DEMO_MODE else (
         False,
         "No-cost Render demo: AI generation is disabled; the reviewed sample brief is shown below.",
     )
@@ -722,7 +781,7 @@ def main() -> None:
     )
 
 
-@st.fragment(run_every="1s")
+@st.fragment(run_every="2s")
 def render_generation_status() -> None:
     job_id = st.session_state.get("generation_job_id")
     status_path = Path(st.session_state["generation_status_path"])
